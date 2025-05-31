@@ -19,7 +19,7 @@ from encoder_worker import EncoderWorker
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle(f"NVIDIA HEVC Encoder GUI (APP_DIR: {APP_DIR})")
+        self.setWindowTitle(f"DUB NVIDIA HEVC Encoder GUI (APP_DIR: {APP_DIR})")
         self.setGeometry(100, 100, 700, 950)
 
         self.hw_info = None
