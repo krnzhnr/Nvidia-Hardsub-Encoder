@@ -28,13 +28,23 @@ class EncoderWorker(QObject):
     finished = pyqtSignal() # Завершение всех задач
     overall_progress = pyqtSignal(int, int) # текущий файл, всего файлов
 
-    def __init__(self, files_to_process: list, target_bitrate_mbps: int, hw_info: dict):
+    def __init__(self, files_to_process: list, target_bitrate_mbps: int, hw_info: dict,
+                output_directory: Path,
+                force_resolution: bool,
+                selected_resolution_option: tuple | None): # <--- Изменено: теперь это кортеж (width, height) или None
         super().__init__()
         self.files_to_process = [Path(f) for f in files_to_process]
         self.target_bitrate_mbps = target_bitrate_mbps
         self.hw_info = hw_info
+        self.output_directory = output_directory
+        self.force_resolution = force_resolution
+        self.selected_target_width = None
+        self.selected_target_height = None
+        if force_resolution and selected_resolution_option:
+            self.selected_target_width, self.selected_target_height = selected_resolution_option
+
         self._is_running = True
-        self._process = None # Для хранения процесса ffmpeg
+        self._process = None
 
     def _log(self, message, level="info"):
         self.log_message.emit(message, level)
@@ -58,7 +68,7 @@ class EncoderWorker(QObject):
                 self._log(f"  Ошибка при попытке остановить FFmpeg: {e}", "error")
 
     def run(self):
-        output_base_dir = APP_DIR / OUTPUT_SUBDIR
+        output_base_dir = self.output_directory
         try:
             output_base_dir.mkdir(parents=True, exist_ok=True)
         except OSError as e:
@@ -93,24 +103,26 @@ class EncoderWorker(QObject):
             extracted_fonts_dir = None # Это будет путь к папке внутри current_file_temp_dir
 
             try:
-                duration, input_codec, subtitle_info, font_attachments, info_error = \
+                # Теперь get_video_subtitle_attachment_info возвращает и разрешение
+                duration, input_codec, source_width, source_height, subtitle_info, font_attachments, info_error = \
                     get_video_subtitle_attachment_info(input_file_path)
 
                 if info_error:
                     self._log(f"  Ошибка получения информации о файле {input_file_path.name}: {info_error}", "error")
                     self.file_processed.emit(input_file_path.name, False, info_error)
                     continue
-                if not duration or not input_codec:
-                    msg = f"  Не удалось получить длительность или кодек для {input_file_path.name}."
+                # Проверяем наличие всех критических данных
+                if not all([duration, input_codec, source_width, source_height]):
+                    msg = f"  Не удалось получить полную информацию (длительность, кодек, разрешение) для {input_file_path.name}."
                     self._log(msg, "error")
                     self.file_processed.emit(input_file_path.name, False, msg)
                     continue
                 
-                self._log(f"  Инфо: Длительность={duration:.2f}s, Кодек={input_codec}", "info")
+                self._log(f"  Инфо: Длительность={duration:.2f}s, Кодек={input_codec}, Исходное разрешение={source_width}x{source_height}", "info")
                 if subtitle_info:
                     self._log(f"    Субтитры '{SUBTITLE_TRACK_TITLE_KEYWORD}': Да (индекс {subtitle_info['index']}, '{subtitle_info.get('title', 'Без названия')}')", "info")
                 else:
-                     self._log(f"    Субтитры '{SUBTITLE_TRACK_TITLE_KEYWORD}': Не найдены", "info")
+                    self._log(f"    Субтитры '{SUBTITLE_TRACK_TITLE_KEYWORD}': Не найдены", "info")
 
                 if font_attachments:
                     self._log(f"    Встроенные шрифты: {len(font_attachments)} шт.", "info")
@@ -120,7 +132,7 @@ class EncoderWorker(QObject):
                         if extract_attachments(input_file_path, font_attachments, fonts_temp_sub_dir, self._log) > 0:
                             extracted_fonts_dir = str(fonts_temp_sub_dir) # Передаем путь как строку
                     except Exception as e_mkdir_font:
-                         self._log(f"    Ошибка создания папки для извлеченных шрифтов: {e_mkdir_font}", "error")
+                        self._log(f"    Ошибка создания папки для извлеченных шрифтов: {e_mkdir_font}", "error")
                 else:
                     self._log(f"    Встроенные шрифты: Не найдены", "info")
 
@@ -143,10 +155,21 @@ class EncoderWorker(QObject):
                 buf_size_str = f"{buf_size_val}M"
 
                 self._log(f"  Параметры битрейта: Целевой={target_br_str}, Макс={max_br_str}, Буфер={buf_size_str}", "info")
+                
+                # Логирование применяемого разрешения
+                current_target_width = self.selected_target_width
+                current_target_height = self.selected_target_height
+
+                if self.force_resolution and current_target_width and current_target_height:
+                    self._log(f"  Принудительное разрешение вывода: {current_target_width}x{current_target_height}", "info")
+                else: # Если не форсируем или что-то пошло не так с выбором, используем исходное
+                    current_target_width = None # Передаем None, чтобы build_ffmpeg_command не добавлял scale
+                    current_target_height = None
+                    self._log(f"  Используется исходное разрешение.", "info")
 
                 enc_settings = {
                     'target_bitrate': target_br_str,
-                    'min_bitrate': target_br_str, # Для VBR можно поставить ниже, например, target/2
+                    'min_bitrate': target_br_str,
                     'max_bitrate': max_br_str,
                     'bufsize': buf_size_str,
                     'audio_codec': AUDIO_CODEC,
@@ -162,7 +185,9 @@ class EncoderWorker(QObject):
 
                 ffmpeg_command, dec_name, enc_name = build_ffmpeg_command(
                     input_file_path, output_file_path, self.hw_info, input_codec,
-                    enc_settings, subtitle_temp_file, extracted_fonts_dir
+                    enc_settings, subtitle_temp_file, extracted_fonts_dir,
+                    current_target_width, # <--- Передаем конкретную ширину
+                    current_target_height # <--- Передаем конкретную высоту
                 )
                 self._log(f"  Декодер: {dec_name}, Энкодер: {enc_name}", "info")
                 # self._log(f"  Команда FFmpeg: {' '.join(ffmpeg_command)}", "debug") # Очень длинная строка
@@ -241,16 +266,16 @@ class EncoderWorker(QObject):
                 # self.progress.emit(0, "") # Делается в начале цикла
 
         if self._is_running: # Если не было прервано
-             self._log("\n--- Все файлы обработаны. ---", "info")
+            self._log("\n--- Все файлы обработаны. ---", "info")
         else:
-             self._log("\n--- Обработка прервана. ---", "warning")
+            self._log("\n--- Обработка прервана. ---", "warning")
         self.finished.emit()
 
     def analyze_ffmpeg_stderr(self, stderr_text):
         if not stderr_text: return "Неизвестная ошибка (пустой stderr)"
 
         if "Driver does not support the required nvenc API version" in stderr_text or \
-           "minimum required Nvidia driver for nvenc" in stderr_text:
+            "minimum required Nvidia driver for nvenc" in stderr_text:
             min_driver_match = re.search(r'driver for nvenc is (\d+(\.\d+)?(\.\d+)?) or newer', stderr_text)
             min_driver_needed = min_driver_match.group(1) if min_driver_match else "не указана"
             return f"Несовместимая версия драйвера NVIDIA. Требуется: {min_driver_needed} или новее."
@@ -269,15 +294,15 @@ class EncoderWorker(QObject):
             return "Файл или папка не найдены (детали не определены)."
         
         if "Permission denied" in stderr_text:
-             match = re.search(r": (.*?): Permission denied", stderr_text)
-             if match:
-                 return f"Отказано в доступе: {match.group(1)}"
-             return "Отказано в доступе (детали не определены)."
+            match = re.search(r": (.*?): Permission denied", stderr_text)
+            if match:
+                return f"Отказано в доступе: {match.group(1)}"
+            return "Отказано в доступе (детали не определены)."
 
         # Последние непустые строки из stderr
         lines = [line for line in stderr_text.strip().split('\n') if line.strip()]
         last_meaningful_lines = lines[-5:] # Берем последние 5 непустых строк
         if last_meaningful_lines:
-             return "Последние сообщения FFmpeg: " + " | ".join(last_meaningful_lines)
+            return "Последние сообщения FFmpeg: " + " | ".join(last_meaningful_lines)
         
         return "Неизвестная ошибка FFmpeg."

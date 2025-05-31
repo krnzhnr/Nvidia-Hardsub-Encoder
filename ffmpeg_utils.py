@@ -46,20 +46,67 @@ def sanitize_filename_part(text, max_length=50):
         return "untitled"
     return sanitized
 
-def get_video_subtitle_attachment_info(filepath: Path):
+def get_video_resolution(filepath: Path) -> tuple[int, int, str] | tuple[None, None, str]:
+    """
+    Получает разрешение (ширина, высота) первого видеопотока.
+    Возвращает (width, height, error_message) или (None, None, error_message).
+    """
     if not FFPROBE_PATH.is_file():
-        return None, None, None, [], f"FFprobe не найден: {FFPROBE_PATH}"
+        return None, None, f"FFprobe не найден: {FFPROBE_PATH}"
 
     command = [
         str(FFPROBE_PATH),
         '-v', 'error',
-        '-show_entries', 'format=duration:stream=index,codec_name,codec_type:stream_tags=title,filename,mimetype',
+        '-select_streams', 'v:0',  # Только первый видеопоток
+        '-show_entries', 'stream=width,height',
+        '-of', 'csv=s=x:p=0',  # Формат вывода: widthxheight
+        str(filepath)
+    ]
+    try:
+        creationflags = subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
+        result = subprocess.run(command, capture_output=True, text=True, check=True,
+                                encoding='utf-8', errors='ignore', creationflags=creationflags)
+        resolution_str = result.stdout.strip()
+        if 'x' in resolution_str:
+            width_str, height_str = resolution_str.split('x')
+            width = int(width_str)
+            height = int(height_str)
+            # Убедимся, что высота четная, т.к. yuv420p этого требует
+            if height % 2 != 0:
+                height -=1 # Округляем вниз до ближайшего четного
+            if width % 2 != 0:
+                width -= 1
+            return width, height, None
+        else:
+            return None, None, f"Не удалось распознать разрешение из вывода ffprobe: {resolution_str}"
+    except subprocess.CalledProcessError as e:
+        error_message = e.stderr.strip().split('\n')[-1] if e.stderr.strip() else str(e)
+        return None, None, f"ffprobe ошибка при получении разрешения ({filepath.name}): {error_message}"
+    except ValueError:
+        return None, None, f"Некорректный формат разрешения от ffprobe для {filepath.name}"
+    except Exception as e:
+        return None, None, f"Ошибка получения разрешения ({filepath.name}): {e}"
+
+# Модифицируем get_video_subtitle_attachment_info, чтобы она также возвращала разрешение
+def get_video_subtitle_attachment_info(filepath: Path):
+    """
+    Получает длительность, кодек видео, разрешение, индекс/название субтитров
+    и информацию о вложенных шрифтах.
+    Возвращает: (duration, video_codec, width, height, subtitle_info, font_attachments, error_msg)
+    """
+    if not FFPROBE_PATH.is_file():
+        return None, None, None, None, None, [], f"FFprobe не найден: {FFPROBE_PATH}"
+
+    command = [
+        str(FFPROBE_PATH),
+        '-v', 'error',
+        '-show_entries', 'format=duration:stream=index,codec_name,codec_type,width,height:stream_tags=title,filename,mimetype',
         '-of', 'json',
         str(filepath)
     ]
     font_mimetypes = ('application/x-truetype-font', 'application/vnd.ms-opentype',
-                      'application/font-sfnt', 'font/ttf', 'font/otf',
-                      'application/font-woff', 'application/font-woff2', 'font/woff', 'font/woff2')
+                        'application/font-sfnt', 'font/ttf', 'font/otf',
+                        'application/font-woff', 'application/font-woff2', 'font/woff', 'font/woff2')
 
     try:
         creationflags = subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
@@ -71,15 +118,31 @@ def get_video_subtitle_attachment_info(filepath: Path):
 
         streams = data.get('streams', [])
         video_codec = None
+        width, height = None, None
         subtitle_info = None
         font_attachments = []
 
-        for stream in streams:
+        for stream_idx, stream in enumerate(streams): # Добавим stream_idx для отладки, если понадобится
             codec_type = stream.get('codec_type')
             tags = stream.get('tags', {})
 
-            if video_codec is None and codec_type == 'video':
+            if video_codec is None and codec_type == 'video': # Берем инфо с первого видеопотока
                 video_codec = stream.get('codec_name', 'unknown_video')
+                width = stream.get('width')
+                height = stream.get('height')
+                if width and height:
+                    try:
+                        width = int(width)
+                        height = int(height)
+                        # Гарантируем четность для yuv420p
+                        if width % 2 != 0: width -=1
+                        if height % 2 != 0: height -=1
+                    except ValueError:
+                        width, height = None, None # Ошибка парсинга, сбрасываем
+                else: # width или height отсутствуют в потоке
+                    width, height = None, None
+
+
             elif subtitle_info is None and codec_type == 'subtitle':
                 title_from_tags = tags.get('title', '')
                 if SUBTITLE_TRACK_TITLE_KEYWORD.lower() in title_from_tags.lower():
@@ -87,7 +150,7 @@ def get_video_subtitle_attachment_info(filepath: Path):
                     try:
                         subtitle_info = {'index': int(index_from_stream), 'title': title_from_tags}
                     except (ValueError, TypeError):
-                        pass # Логгирование ошибки будет в воркере
+                        pass
             elif codec_type == 'attachment':
                 mimetype = tags.get('mimetype', '').lower()
                 filename = tags.get('filename')
@@ -97,20 +160,27 @@ def get_video_subtitle_attachment_info(filepath: Path):
                         font_attachments.append({'index': int(index_from_stream), 'filename': filename})
                     except (ValueError, TypeError):
                         pass
-
+        
         if not video_codec:
-            return duration, None, subtitle_info, font_attachments, f"Не найден видеопоток в {filepath.name}"
-        if not duration:
-            return None, video_codec.lower() if video_codec else None, subtitle_info, font_attachments, f"Не удалось определить длительность для {filepath.name}"
+            return duration, None, None, None, subtitle_info, font_attachments, f"Не найден видеопоток в {filepath.name}"
+        if not width or not height:
+            # Попробуем получить разрешение отдельным вызовом, если в JSON не было
+            w_fallback, h_fallback, err_fallback = get_video_resolution(filepath)
+            if w_fallback and h_fallback:
+                width, height = w_fallback, h_fallback
+            else:
+                return duration, video_codec.lower() if video_codec else None, None, None, subtitle_info, font_attachments, f"Не удалось определить разрешение для {filepath.name}. {err_fallback or ''}"
 
-        return duration, video_codec.lower() if video_codec else None, subtitle_info, font_attachments, None
+        if not duration:
+            return None, video_codec.lower() if video_codec else None, width, height, subtitle_info, font_attachments, f"Не удалось определить длительность для {filepath.name}"
+
+        return duration, video_codec.lower() if video_codec else None, width, height, subtitle_info, font_attachments, None
 
     except subprocess.CalledProcessError as e:
         error_message = e.stderr.strip().split('\n')[-1] if e.stderr else str(e)
-        return None, None, None, [], f"ffprobe ошибка ({filepath.name}): {error_message}"
+        return None, None, None, None, None, [], f"ffprobe ошибка ({filepath.name}): {error_message}"
     except Exception as e:
-        return None, None, None, [], f"Ошибка ffprobe ({filepath.name}): {e}"
-
+        return None, None, None, None, None, [], f"Ошибка ffprobe ({filepath.name}): {e}"
 
 def verify_nvidia_gpu_presence():
     nvidia_smi_cmd = "nvidia-smi"
@@ -185,7 +255,7 @@ def detect_nvidia_hardware():
             if decoder_name in results["decoders"]:
                 # Отдаем предпочтение _nvdec если он есть, или _cuvid если _nvdec нет, или если это первый для base_codec
                 if base_codec not in preferred_decoders or '_nvdec' in decoder_name:
-                     preferred_decoders[base_codec] = decoder_name
+                    preferred_decoders[base_codec] = decoder_name
         
         if preferred_decoders:
             hw_info['decoder_map'] = preferred_decoders
@@ -206,18 +276,20 @@ def detect_nvidia_hardware():
 
 
 def build_ffmpeg_command(input_file: Path, output_file: Path, hw_info: dict,
-                         input_codec: str, enc_settings: dict,
-                         subtitle_temp_file_path: str = None,
-                         temp_fonts_dir_path: str = None):
+                        input_codec: str, enc_settings: dict,
+                        subtitle_temp_file_path: str = None,
+                        temp_fonts_dir_path: str = None,
+                        target_width: int = None,  # <--- Изменено
+                        target_height: int = None): # <--- Изменено
     """
     Строит команду FFmpeg. enc_settings содержит битрейты и другие параметры.
+    target_width, target_height: целевое разрешение или None.
     """
     if not FFMPEG_PATH.is_file():
-         raise FileNotFoundError(f"FFmpeg не найден: {FFMPEG_PATH}")
+        raise FileNotFoundError(f"FFmpeg не найден: {FFMPEG_PATH}")
 
-    command = [str(FFMPEG_PATH), '-y', '-hide_banner', '-loglevel', 'info'] # info для парсинга прогресса
+    command = [str(FFMPEG_PATH), '-y', '-hide_banner', '-loglevel', 'info']
 
-    # Декодер
     decoder_name = 'cpu (по умолчанию)'
     explicit_decoder = hw_info.get('decoder_map', {}).get(input_codec)
     if explicit_decoder:
@@ -226,20 +298,31 @@ def build_ffmpeg_command(input_file: Path, output_file: Path, hw_info: dict,
     
     command.extend(['-i', str(input_file)])
 
-    # Фильтры VF
     vf_options = []
-    burn_subtitles = subtitle_temp_file_path and hw_info.get('subtitles_filter', False)
+    
+    if target_width and target_height:
+        # Убедимся, что целевая высота/ширина четные для yuv420p
+        if target_width % 2 != 0: target_width -= 1
+        if target_height % 2 != 0: target_height -= 1
+        
+        if target_width > 0 and target_height > 0: # Проверка, что они не стали нулевыми/отрицательными
+            # Используем -2 для одной из сторон, если хотим сохранить пропорции, но здесь мы задаем обе.
+            # Если нужна строгость с сохранением пропорций, можно задать -2 для высоты:
+            # scale_filter = f"scale=w={target_width}:h=-2:force_original_aspect_ratio=decrease:flags=bicubic"
+            # Но раз мы рассчитываем обе, то задаем их явно.
+            scale_filter = f"scale=w={target_width}:h={target_height}:flags=bicubic"
+            vf_options.append(scale_filter)
 
+    burn_subtitles = subtitle_temp_file_path and hw_info.get('subtitles_filter', False)
     if burn_subtitles:
         subtitle_path_posix = Path(subtitle_temp_file_path).as_posix()
         subtitle_path_escaped = subtitle_path_posix.replace(":", "\\:")
         subtitle_filter_string = f"subtitles=filename='{subtitle_path_escaped}'"
 
         fontsdir_to_use_str = None
-        # Приоритет у временной папки с извлеченными шрифтами
         if temp_fonts_dir_path and Path(temp_fonts_dir_path).is_dir() and list(Path(temp_fonts_dir_path).glob('*')):
             fontsdir_to_use_str = Path(temp_fonts_dir_path).as_posix().replace(":", "\\:")
-        else: # Иначе папка ./fonts
+        else:
             static_fonts_dir = (APP_DIR / FONTS_SUBDIR).resolve()
             if static_fonts_dir.is_dir() and list(static_fonts_dir.glob('*')):
                 fontsdir_to_use_str = static_fonts_dir.as_posix().replace(":", "\\:")
@@ -249,41 +332,38 @@ def build_ffmpeg_command(input_file: Path, output_file: Path, hw_info: dict,
         
         vf_options.append(subtitle_filter_string)
     
-    # Формат пикселей для совместимости
     vf_options.append("format=pix_fmts=yuv420p") 
     
     if vf_options:
         command.extend(['-vf', ",".join(vf_options)])
 
-    # Энкодер NVENC
     encoder_opts = [
         '-c:v', hw_info['encoder'],
         '-preset', enc_settings['preset'],
         '-tune', enc_settings['tuning'],
-        '-profile:v', 'main', # HEVC Main Profile
+        '-profile:v', 'main',
         '-rc', enc_settings['rc_mode'],
         '-b:v', enc_settings['target_bitrate'],
-        '-minrate', enc_settings['min_bitrate'], # Используется для VBR
+        '-minrate', enc_settings['min_bitrate'],
         '-maxrate', enc_settings['max_bitrate'],
         '-bufsize', enc_settings['bufsize'],
         '-rc-lookahead', enc_settings['lookahead'],
         '-spatial-aq', enc_settings['spatial_aq'],
         '-aq-strength', enc_settings['aq_strength'],
-        '-multipass', '0' # '0' для CBR/VBR, '1' для qvbr (2-pass VBR), '2' для full 2-pass
+        '-multipass', '0'
     ]
     command.extend(encoder_opts)
     encoder_display_name = f"nvidia ({hw_info['encoder']})"
 
-    # Аудио и маппинг
     command.extend([
         '-c:a', enc_settings['audio_codec'],
         '-b:a', enc_settings['audio_bitrate'],
         '-ac', enc_settings['audio_channels'],
         '-map', '0:v:0',
-        '-map', '0:a:0?', # Первая аудиодорожка, если есть
-        '-map_metadata', '-1', # Убрать метаданные из источника
+        '-map', '0:a:0?',
+        '-map_metadata', '-1',
         '-movflags', '+faststart',
-        '-tag:v', 'hvc1', # Для лучшей совместимости с Apple устройствами
+        '-tag:v', 'hvc1',
         str(output_file)
     ])
     
@@ -388,7 +468,7 @@ def extract_attachments(input_file: Path, attachments_info: list, temp_dir: Path
                 if result.stderr:
                     err_msg += f"Stderr: {result.stderr.strip()}"
                 if not output_font_path.is_file() or output_font_path.stat().st_size == 0:
-                     err_msg += " Файл не создан или пуст."
+                    err_msg += " Файл не создан или пуст."
                 log_callback(err_msg, "error")
                 if output_font_path.exists():
                     try: output_font_path.unlink()
