@@ -279,8 +279,8 @@ def build_ffmpeg_command(input_file: Path, output_file: Path, hw_info: dict,
                         input_codec: str, enc_settings: dict,
                         subtitle_temp_file_path: str = None,
                         temp_fonts_dir_path: str = None,
-                        target_width: int = None,  # <--- Изменено
-                        target_height: int = None): # <--- Изменено
+                        target_width: int = None,
+                        target_height: int = None):
     """
     Строит команду FFmpeg. enc_settings содержит битрейты и другие параметры.
     target_width, target_height: целевое разрешение или None.
@@ -310,7 +310,7 @@ def build_ffmpeg_command(input_file: Path, output_file: Path, hw_info: dict,
             # Если нужна строгость с сохранением пропорций, можно задать -2 для высоты:
             # scale_filter = f"scale=w={target_width}:h=-2:force_original_aspect_ratio=decrease:flags=bicubic"
             # Но раз мы рассчитываем обе, то задаем их явно.
-            scale_filter = f"scale=w={target_width}:h={target_height}:flags=bicubic"
+            scale_filter = f"scale=w={target_width}:h={target_height}:flags=lanczos"
             vf_options.append(scale_filter)
 
     burn_subtitles = subtitle_temp_file_path and hw_info.get('subtitles_filter', False)
