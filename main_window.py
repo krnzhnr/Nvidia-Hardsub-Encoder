@@ -74,24 +74,37 @@ class MainWindow(QMainWindow):
         settings_layout_container.addLayout(output_settings_group)
         settings_layout_container.addSpacerItem(QSpacerItem(1, 10, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)) # Отступ
 
-        # -- Группа настроек битрейта --
-        bitrate_settings_group = QVBoxLayout()
+        # -- Группа настроек битрейта / качества --
+        bitrate_quality_group = QVBoxLayout() # Переименуем для ясности
+
+        self.chk_lossless_mode = QCheckBox("Режим 'почти без потерь' (QP=0)")
+        self.chk_lossless_mode.stateChanged.connect(self.toggle_bitrate_settings_availability)
+        bitrate_quality_group.addWidget(self.chk_lossless_mode)
+
+        # Контейнер для элементов управления битрейтом, чтобы их можно было легко показать/скрыть
+        # или сделать неактивными целиком
+        self.bitrate_controls_widget = QWidget()
+        bitrate_controls_layout = QVBoxLayout(self.bitrate_controls_widget)
+        bitrate_controls_layout.setContentsMargins(0,0,0,0) # Убрать отступы у вложенного лейаута
+
         lbl_bitrate = QLabel("Целевой средний битрейт (Мбит/с):")
-        bitrate_settings_group.addWidget(lbl_bitrate)
+        bitrate_controls_layout.addWidget(lbl_bitrate)
         
         self.spin_target_bitrate = QSpinBox()
         self.spin_target_bitrate.setMinimum(1)
         self.spin_target_bitrate.setMaximum(100)
         self.spin_target_bitrate.setValue(DEFAULT_TARGET_V_BITRATE_MBPS)
         self.spin_target_bitrate.valueChanged.connect(self.update_derived_bitrates_display)
-        bitrate_settings_group.addWidget(self.spin_target_bitrate)
+        bitrate_controls_layout.addWidget(self.spin_target_bitrate)
 
         self.lbl_derived_bitrates = QLabel()
         self.update_derived_bitrates_display()
-        bitrate_settings_group.addWidget(self.lbl_derived_bitrates)
+        bitrate_controls_layout.addWidget(self.lbl_derived_bitrates)
         
-        settings_layout_container.addLayout(bitrate_settings_group)
-        settings_layout_container.addSpacerItem(QSpacerItem(1, 10, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)) # Отступ
+        bitrate_quality_group.addWidget(self.bitrate_controls_widget) # Добавляем виджет с контролами битрейта
+        
+        settings_layout_container.addLayout(bitrate_quality_group)
+        settings_layout_container.addSpacerItem(QSpacerItem(1, 10, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed))
 
         # -- Группа настроек разрешения --
         resolution_settings_group = QVBoxLayout()
@@ -166,6 +179,15 @@ class MainWindow(QMainWindow):
             self.output_directory = Path(directory)
             self.line_edit_output_dir.setText(str(self.output_directory))
             self.log_message(f"Папка для вывода изменена на: {self.output_directory}", "info")
+    
+    def toggle_bitrate_settings_availability(self, state):
+        is_lossless_checked = (state == Qt.CheckState.Checked.value)
+        # Делаем контролы битрейта неактивными, если выбран режим "почти без потерь"
+        self.bitrate_controls_widget.setEnabled(not is_lossless_checked)
+        if is_lossless_checked:
+            self.log_message("Активирован режим 'почти без потерь' (QP=0). Настройки битрейта игнорируются.", "info")
+        else:
+            self.log_message("Режим 'почти без потерь' деактивирован. Используются настройки битрейта.", "info")
 
     def toggle_resolution_combobox(self, state):
         self.combo_resolution.setEnabled(state == Qt.CheckState.Checked.value)
@@ -377,7 +399,11 @@ class MainWindow(QMainWindow):
                 QMessageBox.critical(self, "Ошибка оборудования", "Информация об оборудовании NVIDIA не определена. Невозможно начать.")
                 return
 
-            target_bitrate = self.spin_target_bitrate.value()
+            use_lossless_mode = self.chk_lossless_mode.isChecked()
+            target_bitrate = 0 # По умолчанию, если lossless
+            if not use_lossless_mode:
+                target_bitrate = self.spin_target_bitrate.value()
+
             force_res_checked = self.chk_force_resolution.isChecked()
             
             selected_resolution_data = None # Будет (width, height) или None
@@ -400,11 +426,12 @@ class MainWindow(QMainWindow):
             self.encoder_thread = QThread()
             self.encoder_worker = EncoderWorker(
                 self.files_to_process,
-                target_bitrate,
+                target_bitrate, # Передаем 0, если lossless, иначе значение из spinbox
                 self.hw_info,
                 self.output_directory,
                 force_res_checked, # Передаем актуальный флаг
-                selected_resolution_data # Передаем кортеж (width, height) или None
+                selected_resolution_data, # Передаем кортеж (width, height) или None
+                use_lossless_mode
             )
             self.encoder_worker.moveToThread(self.encoder_thread)
 
@@ -425,9 +452,10 @@ class MainWindow(QMainWindow):
 
     def set_controls_enabled(self, enabled):
         self.btn_select_files.setEnabled(enabled)
-        self.spin_target_bitrate.setEnabled(enabled)
+        # self.spin_target_bitrate.setEnabled(enabled) # Теперь управляется через self.bitrate_controls_widget
         self.btn_select_output_dir.setEnabled(enabled)
         self.chk_force_resolution.setEnabled(enabled)
+        self.chk_lossless_mode.setEnabled(enabled) # <--- Управляем доступностью чекбокса lossless
         # Комбобокс разрешения управляется состоянием чекбокса, но его тоже блокируем/разблокируем
         if enabled:
             # Если контролы включаются, состояние комбобокса зависит от чекбокса

@@ -337,21 +337,38 @@ def build_ffmpeg_command(input_file: Path, output_file: Path, hw_info: dict,
     if vf_options:
         command.extend(['-vf', ",".join(vf_options)])
 
+    # Параметры видео энкодера
     encoder_opts = [
         '-c:v', hw_info['encoder'],
         '-preset', enc_settings['preset'],
         '-tune', enc_settings['tuning'],
-        '-profile:v', 'main',
-        '-rc', enc_settings['rc_mode'],
-        '-b:v', enc_settings['target_bitrate'],
-        '-minrate', enc_settings['min_bitrate'],
-        '-maxrate', enc_settings['max_bitrate'],
-        '-bufsize', enc_settings['bufsize'],
+        '-profile:v', 'main', # HEVC Main Profile
+        # rc_mode и связанные параметры теперь зависят от use_lossless_mode
+    ]
+
+    if enc_settings.get('use_lossless_mode', False): # Проверяем наличие ключа
+        encoder_opts.extend([
+            '-rc', 'constqp',
+            '-qp', str(enc_settings['qp_value']) # QP должен быть строкой
+        ])
+    else:
+        encoder_opts.extend([
+            '-rc', enc_settings['rc_mode'], # Например, 'vbr'
+            '-b:v', enc_settings['target_bitrate'],
+            '-minrate', enc_settings['min_bitrate'],
+            '-maxrate', enc_settings['max_bitrate'],
+            '-bufsize', enc_settings['bufsize']
+        ])
+    
+    # Общие параметры для обоих режимов (если применимы)
+    encoder_opts.extend([
         '-rc-lookahead', enc_settings['lookahead'],
         '-spatial-aq', enc_settings['spatial_aq'],
         '-aq-strength', enc_settings['aq_strength'],
-        '-multipass', '0'
-    ]
+        '-multipass', '0' # Для constqp multipass не нужен, для VBR часто 0 или 2 (если 2pass QVBR)
+                        # Оставим 0 для простоты, для constqp он игнорируется или не вредит.
+    ])
+    
     command.extend(encoder_opts)
     encoder_display_name = f"nvidia ({hw_info['encoder']})"
 

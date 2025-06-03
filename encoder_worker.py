@@ -12,7 +12,8 @@ from config import (
     AUDIO_CODEC, AUDIO_BITRATE, AUDIO_CHANNELS,
     NVENC_PRESET, NVENC_TUNING, NVENC_RC, NVENC_LOOKAHEAD,
     NVENC_AQ, NVENC_AQ_STRENGTH, SUBTITLE_TRACK_TITLE_KEYWORD,
-    FONTS_SUBDIR, DEFAULT_AUDIO_TRACK_LANGUAGE, DEFAULT_AUDIO_TRACK_TITLE
+    FONTS_SUBDIR, DEFAULT_AUDIO_TRACK_LANGUAGE,
+    DEFAULT_AUDIO_TRACK_TITLE, LOSSLESS_QP_VALUE
 )
 from ffmpeg_utils import (
     get_video_subtitle_attachment_info, build_ffmpeg_command,
@@ -31,13 +32,15 @@ class EncoderWorker(QObject):
     def __init__(self, files_to_process: list, target_bitrate_mbps: int, hw_info: dict,
                 output_directory: Path,
                 force_resolution: bool,
-                selected_resolution_option: tuple | None): # <--- Изменено: теперь это кортеж (width, height) или None
+                selected_resolution_option: tuple | None,
+                use_lossless_mode: bool):
         super().__init__()
         self.files_to_process = [Path(f) for f in files_to_process]
         self.target_bitrate_mbps = target_bitrate_mbps
         self.hw_info = hw_info
         self.output_directory = output_directory
         self.force_resolution = force_resolution
+        self.use_lossless_mode = use_lossless_mode
         self.selected_target_width = None
         self.selected_target_height = None
         if force_resolution and selected_resolution_option:
@@ -182,8 +185,27 @@ class EncoderWorker(QObject):
                     'spatial_aq': NVENC_AQ,
                     'aq_strength': NVENC_AQ_STRENGTH,
                     'audio_track_title': DEFAULT_AUDIO_TRACK_TITLE,
-                    'audio_track_language': DEFAULT_AUDIO_TRACK_LANGUAGE
+                    'audio_track_language': DEFAULT_AUDIO_TRACK_LANGUAGE,
+                    'use_lossless_mode': self.use_lossless_mode 
                 }
+                
+                if self.use_lossless_mode:
+                    enc_settings['rc_mode'] = 'constqp'
+                    enc_settings['qp_value'] = LOSSLESS_QP_VALUE
+                    self._log(f"  Режим кодирования: Постоянное качество (QP={LOSSLESS_QP_VALUE})", "info")
+                else:
+                    target_br_str = f"{self.target_bitrate_mbps}M"
+                    max_br_val = self.target_bitrate_mbps * 2
+                    max_br_str = f"{max_br_val}M"
+                    buf_size_val = max_br_val * 2
+                    buf_size_str = f"{buf_size_val}M"
+                    
+                    enc_settings['rc_mode'] = NVENC_RC # NVENC_RC из config (например, 'vbr')
+                    enc_settings['target_bitrate'] = target_br_str
+                    enc_settings['min_bitrate'] = target_br_str # или другая логика
+                    enc_settings['max_bitrate'] = max_br_str
+                    enc_settings['bufsize'] = buf_size_str
+                    self._log(f"  Режим кодирования: Переменный битрейт (Целевой={target_br_str}, Мин={target_br_str}, Макс={max_br_str}, Буфер={buf_size_str})", "info")
 
                 ffmpeg_command, dec_name, enc_name = build_ffmpeg_command(
                     input_file_path, output_file_path, self.hw_info, input_codec,
