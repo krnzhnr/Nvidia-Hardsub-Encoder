@@ -355,12 +355,27 @@ def build_ffmpeg_command(input_file: Path, output_file: Path, hw_info: dict,
     command.extend(encoder_opts)
     encoder_display_name = f"nvidia ({hw_info['encoder']})"
 
+    # Параметры аудио кодека
     command.extend([
         '-c:a', enc_settings['audio_codec'],
         '-b:a', enc_settings['audio_bitrate'],
-        '-ac', enc_settings['audio_channels'],
-        '-map', '0:v:0',
-        '-map', '0:a:0?',
+        '-ac', enc_settings['audio_channels']
+    ])
+
+    # Маппинг потоков
+    command.extend(['-map', '0:v:0', '-map', '0:a:0?'])
+
+    # Метаданные для аудиодорожки
+    audio_track_title = enc_settings.get('audio_track_title')
+    audio_track_language = enc_settings.get('audio_track_language')
+
+    if audio_track_title:
+        command.extend(['-metadata:s:a:0', f'title={audio_track_title}'])
+    if audio_track_language:
+        command.extend(['-metadata:s:a:0', f'language={audio_track_language}'])
+
+    # Общие метаданные и флаги контейнера
+    command.extend([
         '-map_metadata', '-1',
         '-movflags', '+faststart',
         '-tag:v', 'hvc1',

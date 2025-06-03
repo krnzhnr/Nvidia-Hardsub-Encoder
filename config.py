@@ -14,6 +14,10 @@ OUTPUT_SUBDIR = "ENCODED_HEVC_NVIDIA_GUI"
 # Настройки по умолчанию, которые могут быть изменены через GUI или сохранены
 DEFAULT_TARGET_V_BITRATE_MBPS = 4  # в Мбит/с
 
+# Параметры для аудиодорожки
+DEFAULT_AUDIO_TRACK_TITLE = "Русский [Дубляжная]" # Заголовок
+DEFAULT_AUDIO_TRACK_LANGUAGE = "rus" # Код языка ISO 639-2 (трехбуквенный)
+
 # Параметры NVENC (могут быть вынесены в настройки GUI позже)
 AUDIO_CODEC = "aac"
 AUDIO_BITRATE = "256k"

@@ -12,7 +12,7 @@ from config import (
     AUDIO_CODEC, AUDIO_BITRATE, AUDIO_CHANNELS,
     NVENC_PRESET, NVENC_TUNING, NVENC_RC, NVENC_LOOKAHEAD,
     NVENC_AQ, NVENC_AQ_STRENGTH, SUBTITLE_TRACK_TITLE_KEYWORD,
-    FONTS_SUBDIR
+    FONTS_SUBDIR, DEFAULT_AUDIO_TRACK_LANGUAGE, DEFAULT_AUDIO_TRACK_TITLE
 )
 from ffmpeg_utils import (
     get_video_subtitle_attachment_info, build_ffmpeg_command,
@@ -180,7 +180,9 @@ class EncoderWorker(QObject):
                     'rc_mode': NVENC_RC,
                     'lookahead': NVENC_LOOKAHEAD,
                     'spatial_aq': NVENC_AQ,
-                    'aq_strength': NVENC_AQ_STRENGTH
+                    'aq_strength': NVENC_AQ_STRENGTH,
+                    'audio_track_title': DEFAULT_AUDIO_TRACK_TITLE,
+                    'audio_track_language': DEFAULT_AUDIO_TRACK_LANGUAGE
                 }
 
                 ffmpeg_command, dec_name, enc_name = build_ffmpeg_command(
