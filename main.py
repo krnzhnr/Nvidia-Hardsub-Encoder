@@ -23,5 +23,4 @@ if __name__ == '__main__':
     print(f"Приложение запущено из: {APP_DIR}")
     print(f"Используется PyQt {app.property('QT_VERSION_STR')}")
 
-
     sys.exit(app.exec())

@@ -280,7 +280,8 @@ def build_ffmpeg_command(input_file: Path, output_file: Path, hw_info: dict,
                         subtitle_temp_file_path: str = None,
                         temp_fonts_dir_path: str = None,
                         target_width: int = None,
-                        target_height: int = None):
+                        target_height: int = None,
+                        crop_parameters: str = None):
     """
     Строит команду FFmpeg. enc_settings содержит битрейты и другие параметры.
     target_width, target_height: целевое разрешение или None.
@@ -298,20 +299,43 @@ def build_ffmpeg_command(input_file: Path, output_file: Path, hw_info: dict,
     
     command.extend(['-i', str(input_file)])
 
-    vf_options = []
+    vf_items = []
     
+    # 1. Фильтр обрезки (crop), если есть
+    if crop_parameters:
+        # crop_parameters должен быть строкой "w:h:x:y"
+        # Дополнительная проверка, что параметры корректны (например, не нулевые w, h)
+        try:
+            cw, ch, cx, cy = map(int, crop_parameters.split(':'))
+            if cw > 0 and ch > 0: # Простая проверка
+                # Важно: после кропа разрешение может измениться, и если дальше идет scale,
+                # то scale должен применяться к уже обрезанному видео.
+                # Если scale применяется, он должен учитывать новое разрешение после кропа.
+                # Это усложняет логику, если и кроп, и scale активны.
+                # Пока что, если есть кроп, он применяется первым.
+                crop_filter = f"crop={crop_parameters}"
+                vf_items.append(crop_filter)
+            else:
+                # log_callback здесь недоступен, но можно передать или логировать в worker
+                print(f"[Предупреждение] Некорректные параметры кропа: {crop_parameters}. Кроп пропущен.")
+        except ValueError:
+            print(f"[Предупреждение] Ошибка парсинга параметров кропа: {crop_parameters}. Кроп пропущен.")
+
+
+    # 2. Фильтр масштабирования (scale), если есть
     if target_width and target_height:
-        # Убедимся, что целевая высота/ширина четные для yuv420p
+        # ... (логика scale_filter) ...
+        # ВАЖНО: Если был применен кроп, то target_width/height для scale
+        # должны быть рассчитаны относительно УЖЕ ОБРЕЗАННОГО разрешения,
+        # либо scale должен быть достаточно умным (например, scale=-2:720).
+        # Для простоты, если есть и кроп и scale, это может дать неожиданный результат,
+        # если scale задан абсолютными значениями, не учитывающими кроп.
+        # Текущая реализация scale применяет target_width/height как есть.
         if target_width % 2 != 0: target_width -= 1
         if target_height % 2 != 0: target_height -= 1
-        
-        if target_width > 0 and target_height > 0: # Проверка, что они не стали нулевыми/отрицательными
-            # Используем -2 для одной из сторон, если хотим сохранить пропорции, но здесь мы задаем обе.
-            # Если нужна строгость с сохранением пропорций, можно задать -2 для высоты:
-            # scale_filter = f"scale=w={target_width}:h=-2:force_original_aspect_ratio=decrease:flags=bicubic"
-            # Но раз мы рассчитываем обе, то задаем их явно.
-            scale_filter = f"scale=w={target_width}:h={target_height}:flags=lanczos"
-            vf_options.append(scale_filter)
+        if target_width > 0 and target_height > 0:
+            scale_filter_str = f"scale=w={target_width}:h={target_height}:flags=lanczos"
+            vf_items.append(scale_filter_str)
 
     burn_subtitles = subtitle_temp_file_path and hw_info.get('subtitles_filter', False)
     if burn_subtitles:
@@ -330,12 +354,13 @@ def build_ffmpeg_command(input_file: Path, output_file: Path, hw_info: dict,
         if fontsdir_to_use_str:
             subtitle_filter_string += f":fontsdir='{fontsdir_to_use_str}'"
         
-        vf_options.append(subtitle_filter_string)
+        vf_items.append(subtitle_filter_string)
     
-    vf_options.append("format=pix_fmts=yuv420p") 
+    # 4. Фильтр формата (format)
+    vf_items.append("format=pix_fmts=yuv420p") 
     
-    if vf_options:
-        command.extend(['-vf', ",".join(vf_options)])
+    if vf_items:
+        command.extend(['-vf', ",".join(vf_items)])
 
     # Параметры видео энкодера
     encoder_opts = [
@@ -602,3 +627,71 @@ def extract_subtitle_track(input_file: Path, subtitle_info: dict, temp_dir: Path
     except Exception as e:
         log_callback(f"  Неожиданная ошибка извлечения субтитров '{subtitle_title}': {e}", "error")
         return None
+
+
+def get_crop_parameters(filepath: Path, log_callback, duration_for_analysis_sec=20, limit_value=24) -> str | None:
+    """
+    Анализирует видео с помощью cropdetect и возвращает строку параметров для фильтра crop.
+    duration_for_analysis_sec: сколько секунд видео анализировать.
+    limit_value: порог для cropdetect (0-255).
+    Возвращает строку типа "w:h:x:y" или None, если не удалось.
+    """
+    if not FFMPEG_PATH.is_file():
+        log_callback(f"FFmpeg не найден для cropdetect: {FFMPEG_PATH}", "error")
+        return None
+
+    # Анализируем не все видео, а только часть, чтобы было быстрее.
+    # Можно также добавить -ss для начала с определенного момента, если начало черное.
+    # -t указывает длительность анализа.
+    # -vf cropdetect=limit=24:round=2 -f null -
+    # limit: порог (0-255), чем меньше, тем чувствительнее к небольшим отклонениям от черного.
+    # round: округление до значения, кратного этому числу (для ширины/высоты). 2 - для четных.
+    command = [
+        str(FFMPEG_PATH),
+        '-hide_banner',
+        '-i', str(filepath),
+        '-t', str(duration_for_analysis_sec), # Анализируем первые N секунд
+        '-vf', f'cropdetect=limit={limit_value}:round=2', # round=2 для четных размеров
+        '-f', 'null', # Не создаем выходной файл
+        '-' # Вывод в stdout/stderr
+    ]
+    log_callback(f"  Запуск cropdetect для {filepath.name} (анализ {duration_for_analysis_sec} сек, предел {limit_value})...", "info")
+    
+    crop_params_str = None
+    try:
+        creationflags = subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
+        # cropdetect выводит информацию в stderr
+        result = subprocess.run(command, capture_output=True, text=True, 
+                                encoding='utf-8', errors='ignore', 
+                                creationflags=creationflags, check=False, timeout=duration_for_analysis_sec + 30) # Таймаут чуть больше времени анализа
+
+        # Ищем последнюю строку с crop=... в stderr
+        # Пример вывода: [Parsed_cropdetect_0 @ 0x...] x1:0 x2:1919 y1:136 y2:943 w:1920 h:808 x:0 y:136 pts:743 t:29.720000 crop=1920:808:0:136
+        # Нам нужна часть "1920:808:0:136"
+        
+        # Более надежный поиск последней строки cropdetect
+        last_crop_line = None
+        for line in reversed(result.stderr.splitlines()):
+            if "crop=" in line:
+                last_crop_line = line
+                break
+        
+        if last_crop_line:
+            match = re.search(r'crop=(\d+:\d+:\d+:\d+)', last_crop_line)
+            if match:
+                crop_params_str = match.group(1)
+                # Проверим, что w и h не равны исходным (или очень близки), иначе кроп не нужен
+                # Это требует знания исходных w, h. Пока просто возвращаем.
+                # Можно добавить проверку: если x=0, y=0 и w, h равны исходным, то кроп не нужен.
+                log_callback(f"    cropdetect предложил: {crop_params_str}", "info")
+            else:
+                log_callback(f"    Не удалось распарсить параметры crop из вывода cropdetect: {last_crop_line}", "warning")
+        else:
+            log_callback(f"    cropdetect не вернул параметров обрезки. stderr: {result.stderr[-500:]}", "warning") # последние 500 символов stderr
+
+    except subprocess.TimeoutExpired:
+        log_callback(f"    Таймаут при выполнении cropdetect для {filepath.name}.", "error")
+    except Exception as e:
+        log_callback(f"    Ошибка при выполнении cropdetect для {filepath.name}: {e}", "error")
+    
+    return crop_params_str

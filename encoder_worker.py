@@ -18,7 +18,7 @@ from config import (
 from ffmpeg_utils import (
     get_video_subtitle_attachment_info, build_ffmpeg_command,
     parse_ffmpeg_output_for_progress, extract_attachments,
-    extract_subtitle_track
+    extract_subtitle_track, get_crop_parameters
 )
 
 class EncoderWorker(QObject):
@@ -33,7 +33,8 @@ class EncoderWorker(QObject):
                 output_directory: Path,
                 force_resolution: bool,
                 selected_resolution_option: tuple | None,
-                use_lossless_mode: bool):
+                use_lossless_mode: bool,
+                auto_crop_enabled: bool):
         super().__init__()
         self.files_to_process = [Path(f) for f in files_to_process]
         self.target_bitrate_mbps = target_bitrate_mbps
@@ -41,6 +42,7 @@ class EncoderWorker(QObject):
         self.output_directory = output_directory
         self.force_resolution = force_resolution
         self.use_lossless_mode = use_lossless_mode
+        self.auto_crop_enabled = auto_crop_enabled
         self.selected_target_width = None
         self.selected_target_height = None
         if force_resolution and selected_resolution_option:
@@ -104,6 +106,9 @@ class EncoderWorker(QObject):
 
             subtitle_temp_file = None
             extracted_fonts_dir = None # Это будет путь к папке внутри current_file_temp_dir
+            crop_params_for_ffmpeg = None
+            cropped_width_after_detect = None # Для хранения ширины после кропа
+            cropped_height_after_detect = None # Для хранения высоты после кропа
 
             try:
                 # Теперь get_video_subtitle_attachment_info возвращает и разрешение
@@ -126,6 +131,42 @@ class EncoderWorker(QObject):
                     self._log(f"    Субтитры '{SUBTITLE_TRACK_TITLE_KEYWORD}': Да (индекс {subtitle_info['index']}, '{subtitle_info.get('title', 'Без названия')}')", "info")
                 else:
                     self._log(f"    Субтитры '{SUBTITLE_TRACK_TITLE_KEYWORD}': Не найдены", "info")
+                
+                # --- АВТОМАТИЧЕСКАЯ ОБРЕЗКА (CROP) ---
+                if self.auto_crop_enabled:
+                    # Анализируем N секунд видео (например, 20-30)
+                    # Увеличим время анализа для большей надежности, но это замедлит процесс
+                    # Для cropdetect важен параметр limit. По умолчанию 24.
+                    # Меньшие значения делают его более чувствительным к не совсем черным пикселям.
+                    detected_crop = get_crop_parameters(input_file_path, self._log, duration_for_analysis_sec=30, limit_value=24)
+                    if detected_crop:
+                        # Проверка, что кроп действительно что-то обрезает
+                        # detected_crop это "w:h:x:y"
+                        try:
+                            cw, ch, cx, cy = map(int, detected_crop.split(':'))
+                            # Если обрезанная ширина/высота меньше исходной, или есть смещение
+                            if cw < source_width or ch < source_height or cx > 0 or cy > 0:
+                                # Дополнительная проверка: не обрезаем слишком много
+                                # (например, если осталось меньше 75% площади)
+                                if (cw * ch) / (source_width * source_height) < 0.70 and (source_width * source_height) > (240*240): # Не применять к очень маленьким видео
+                                    self._log(f"    cropdetect предложил слишком сильную обрезку ({detected_crop}) для исходного {source_width}x{source_height}. Кроп пропущен.", "warning")
+                                else:
+                                    crop_params_for_ffmpeg = detected_crop
+                                    cropped_width_after_detect = cw  # Сохраняем размеры после кропа
+                                    cropped_height_after_detect = ch
+                                    self._log(f"    Будет применен кроп: {crop_params_for_ffmpeg}", "info")
+                                    # ВАЖНО: Если и кроп, и масштабирование включены,
+                                    # масштабирование должно учитывать новое разрешение ПОСЛЕ кропа.
+                                    # Если `force_resolution` включено, то `selected_target_width/height`
+                                    # должны теперь применяться к `cw` и `ch`.
+                                    # Это сложная логика, пока что мы просто передаем параметры кропа.
+                                    # И если есть scale, он применится к уже обрезанному.
+                                    # Если scale был в абсолютных значениях (e.g. 1280x720), то он просто сделает 1280x720 из обрезанного.
+                            else:
+                                self._log(f"    cropdetect не нашел значимых черных полос ({detected_crop} совпадает с исходным). Кроп не требуется.", "info")
+                        except ValueError:
+                            self._log(f"    Ошибка парсинга параметров cropdetect: {detected_crop}", "warning")
+                # ------------------------------------
 
                 if font_attachments:
                     self._log(f"    Встроенные шрифты: {len(font_attachments)} шт.", "info")
@@ -141,6 +182,48 @@ class EncoderWorker(QObject):
 
                 if subtitle_info and self.hw_info.get('subtitles_filter'):
                     subtitle_temp_file = extract_subtitle_track(input_file_path, subtitle_info, current_file_temp_dir, self._log)
+                
+                # --- ОПРЕДЕЛЕНИЕ ЦЕЛЕВОГО РАЗРЕШЕНИЯ ДЛЯ МАСШТАБИРОВАНИЯ ---
+                # Берем изначальные целевые W и H из GUI (если выбрано принудительное разрешение)
+                current_target_width_gui = self.selected_target_width
+                current_target_height_gui = self.selected_target_height
+
+                # Переменные, которые пойдут в build_ffmpeg_command для scale
+                final_scale_target_w = None
+                final_scale_target_h = None
+
+                if self.force_resolution and current_target_width_gui and current_target_height_gui:
+                    # Если включено принудительное разрешение
+                    self._log(f"  Запрошено принудительное разрешение вывода: {current_target_width_gui}x{current_target_height_gui}", "info")
+                    
+                    if cropped_width_after_detect and cropped_height_after_detect:
+                        # Если был применен кроп, рассчитываем новое целевое разрешение для scale,
+                        # сохраняя соотношение сторон ПОСЛЕ кропа, и ориентируясь на целевую ВЫСОТУ из GUI.
+                        # (или ширину, если это более логично, но обычно ориентируются на высоту типа 720p, 1080p)
+                        
+                        # Соотношение сторон после кропа
+                        aspect_ratio_after_crop = cropped_width_after_detect / cropped_height_after_detect
+                        
+                        # Рассчитываем новую ширину, исходя из целевой высоты GUI и нового AR
+                        final_scale_target_h = current_target_height_gui
+                        final_scale_target_w = int(round(final_scale_target_h * aspect_ratio_after_crop))
+                        
+                        # Округление до четного
+                        if final_scale_target_w % 2 != 0: final_scale_target_w -=1 
+                        if final_scale_target_h % 2 != 0: final_scale_target_h -=1 # Уже должно быть четным, если current_target_height_gui четное
+
+                        self._log(f"    После кропа ({cropped_width_after_detect}x{cropped_height_after_detect}, AR: {aspect_ratio_after_crop:.2f}), "
+                                    f"масштабируем до {final_scale_target_w}x{final_scale_target_h} для сохранения пропорций.", "info")
+                    else:
+                        # Кропа не было, используем выбранное в GUI разрешение как есть
+                        final_scale_target_w = current_target_width_gui
+                        final_scale_target_h = current_target_height_gui
+                        self._log(f"    Масштабируем до {final_scale_target_w}x{final_scale_target_h} (кроп не применялся).", "info")
+                else:
+                    # Принудительное разрешение не включено, масштабирование не применяется
+                    # (кроме как если сам кроп изменил разрешение)
+                    self._log(f"  Используется разрешение после кропа (если был) или исходное.", "info")
+                # ----------------------------------------------------------
                 
                 output_filename = f"{input_file_path.stem}.mp4"
                 output_file_path = output_base_dir / output_filename
@@ -160,15 +243,15 @@ class EncoderWorker(QObject):
                 self._log(f"  Параметры битрейта: Целевой={target_br_str}, Макс={max_br_str}, Буфер={buf_size_str}", "info")
                 
                 # Логирование применяемого разрешения
-                current_target_width = self.selected_target_width
-                current_target_height = self.selected_target_height
+                # current_target_width = self.selected_target_width
+                # current_target_height = self.selected_target_height
 
-                if self.force_resolution and current_target_width and current_target_height:
-                    self._log(f"  Принудительное разрешение вывода: {current_target_width}x{current_target_height}", "info")
-                else: # Если не форсируем или что-то пошло не так с выбором, используем исходное
-                    current_target_width = None # Передаем None, чтобы build_ffmpeg_command не добавлял scale
-                    current_target_height = None
-                    self._log(f"  Используется исходное разрешение.", "info")
+                # if self.force_resolution and current_target_width and current_target_height:
+                #     self._log(f"  Принудительное разрешение вывода: {current_target_width}x{current_target_height}", "info")
+                # else: # Если не форсируем или что-то пошло не так с выбором, используем исходное
+                #     current_target_width = None # Передаем None, чтобы build_ffmpeg_command не добавлял scale
+                #     current_target_height = None
+                #     self._log(f"  Используется исходное разрешение.", "info")
 
                 enc_settings = {
                     'target_bitrate': target_br_str,
@@ -209,9 +292,12 @@ class EncoderWorker(QObject):
 
                 ffmpeg_command, dec_name, enc_name = build_ffmpeg_command(
                     input_file_path, output_file_path, self.hw_info, input_codec,
-                    enc_settings, subtitle_temp_file, extracted_fonts_dir,
-                    current_target_width, # <--- Передаем конкретную ширину
-                    current_target_height # <--- Передаем конкретную высоту
+                    enc_settings,
+                    subtitle_temp_file,
+                    extracted_fonts_dir,
+                    final_scale_target_w, # <--- Передаем рассчитанную ширину для scale
+                    final_scale_target_h, # <--- Передаем рассчитанную высоту для scale
+                    crop_params_for_ffmpeg,
                 )
                 self._log(f"  Декодер: {dec_name}, Энкодер: {enc_name}", "info")
                 # self._log(f"  Команда FFmpeg: {' '.join(ffmpeg_command)}", "debug") # Очень длинная строка

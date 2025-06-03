@@ -5,9 +5,12 @@ from PyQt6.QtWidgets import (
     QLabel, QFileDialog, QLineEdit, QMessageBox, QSpinBox,
     QScrollArea, QSizePolicy, QSpacerItem, QComboBox, QCheckBox
 )
-from PyQt6.QtCore import Qt, QThread, QCoreApplication
-from PyQt6.QtGui import QPalette, QColor, QTextCursor
+from PyQt6.QtCore import Qt, QThread, QCoreApplication, QUrl # QDir может быть полезен, но не обязателен
+from PyQt6.QtGui import QPalette, QColor, QTextCursor, QDesktopServices # Для открытия папки
 from pathlib import Path
+import os # Для os.startfile на Windows
+import platform # Для определения ОС
+import subprocess # Для open/xdg-open на Linux/macOS
 
 from config import (
     APP_DIR, VIDEO_EXTENSIONS, DEFAULT_TARGET_V_BITRATE_MBPS,
@@ -20,8 +23,9 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(f"DUB NVIDIA HEVC Encoder GUI (APP_DIR: {APP_DIR})")
-        self.setGeometry(100, 100, 700, 950)
+        self.setGeometry(100, 100, 1050, 750)
 
+        self.processed_files_count = 0
         self.hw_info = None
         self.encoder_thread = None
         self.encoder_worker = None
@@ -70,6 +74,13 @@ class MainWindow(QMainWindow):
         self.btn_select_output_dir.clicked.connect(self.select_output_directory)
         output_dir_layout.addWidget(self.btn_select_output_dir)
         output_settings_group.addLayout(output_dir_layout)
+        
+        # --- НОВАЯ КНОПКА ДЛЯ ОТКРЫТИЯ ПАПКИ ---
+        self.btn_open_output_dir = QPushButton("Открыть")
+        self.btn_open_output_dir.setToolTip("Открыть выбранную папку вывода в проводнике")
+        self.btn_open_output_dir.clicked.connect(self.open_output_directory_in_explorer)
+        output_dir_layout.addWidget(self.btn_open_output_dir)
+        # -----------------------------------------
 
         settings_layout_container.addLayout(output_settings_group)
         settings_layout_container.addSpacerItem(QSpacerItem(1, 10, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)) # Отступ
@@ -116,6 +127,11 @@ class MainWindow(QMainWindow):
         # self.combo_resolution.addItems(["720p (1280x720)", "1080p (1920x1080)"]) # Удаляем статические элементы
         self.combo_resolution.setEnabled(False)
         resolution_settings_group.addWidget(self.combo_resolution)
+        
+        # --- ЧЕКБОКС ДЛЯ АВТО-КРОПА ---
+        self.chk_auto_crop = QCheckBox("Автоматически обрезать черные полосы")
+        self.chk_auto_crop.setToolTip("Анализирует видео для удаления черных полос.\nМожет немного увеличить время обработки.")
+        resolution_settings_group.addWidget(self.chk_auto_crop) # Добавляем в ту же группу, что и разрешение
         
         settings_layout_container.addLayout(resolution_settings_group)
         
@@ -179,6 +195,51 @@ class MainWindow(QMainWindow):
             self.output_directory = Path(directory)
             self.line_edit_output_dir.setText(str(self.output_directory))
             self.log_message(f"Папка для вывода изменена на: {self.output_directory}", "info")
+    
+    def open_output_directory_in_explorer(self):
+        """Открывает выбранную папку вывода в системном файловом менеджере."""
+        directory_path = self.output_directory # Это Path объект
+        
+        if not directory_path.exists():
+            # Попытаемся создать директорию, если ее нет, но это не всегда нужно перед открытием
+            # Может быть, лучше просто сообщить, что папки нет
+            try:
+                directory_path.mkdir(parents=True, exist_ok=True)
+                self.log_message(f"Папка вывода {directory_path} создана.", "info")
+            except OSError as e:
+                self.log_message(f"Не удалось создать папку вывода {directory_path}: {e}", "error")
+                QMessageBox.warning(self, "Папка не найдена", f"Не удалось создать или найти папку:\n{directory_path}")
+                return
+        
+        if not directory_path.is_dir():
+            self.log_message(f"Путь вывода {directory_path} не является папкой.", "error")
+            QMessageBox.warning(self, "Ошибка", f"Указанный путь вывода не является папкой:\n{directory_path}")
+            return
+
+        # QDesktopServices.openUrl() более кросс-платформенный для URL, включая file:///
+        # Для локальных путей он тоже должен работать.
+        # Преобразуем Path в URL (file:///...)
+        url = QUrl.fromLocalFile(str(directory_path.resolve())) # resolve() для абсолютного пути
+        
+        if not QDesktopServices.openUrl(url):
+            # Если QDesktopServices не сработал, пробуем специфичные для ОС методы
+            self.log_message(f"QDesktopServices не смог открыть {url}. Пробуем системные методы...", "warning")
+            try:
+                current_os = platform.system()
+                abs_path_str = str(directory_path.resolve())
+                if current_os == "Windows":
+                    os.startfile(abs_path_str) # Наиболее надежно для Windows
+                elif current_os == "Darwin": # macOS
+                    subprocess.run(["open", abs_path_str], check=True)
+                else: # Linux и другие Unix-подобные
+                    subprocess.run(["xdg-open", abs_path_str], check=True)
+                self.log_message(f"Папка {abs_path_str} открыта системным методом.", "info")
+            except Exception as e:
+                self.log_message(f"Не удалось открыть папку {directory_path} системным методом: {e}", "error")
+                QMessageBox.warning(self, "Ошибка открытия папки", 
+                                    f"Не удалось открыть папку:\n{directory_path}\n\nОшибка: {e}")
+        else:
+             self.log_message(f"Папка {directory_path} открыта через QDesktopServices.", "info")
     
     def toggle_bitrate_settings_availability(self, state):
         is_lossless_checked = (state == Qt.CheckState.Checked.value)
@@ -269,7 +330,9 @@ class MainWindow(QMainWindow):
             self.list_widget_files.clear()
             self.list_widget_files.addItems([Path(f).name for f in files])
             self.log_message(f"Выбрано файлов: {len(files)}", "info")
-            self.update_overall_progress_display(0, len(files))
+
+            self.processed_files_count = 0 # Сбрасываем счетчик обработанных при новом выборе
+            self.update_overall_progress_display()
 
             # Если выбран хотя бы один файл, пытаемся получить разрешение первого
             # и обновить список разрешений в QComboBox
@@ -413,6 +476,8 @@ class MainWindow(QMainWindow):
                     self.log_message("Ошибка: Выбрано некорректное значение разрешения. Кодирование с исходным разрешением.", "warning")
                     force_res_checked = False # Сбрасываем флаг принудительного, т.к. данные некорректны
             
+            auto_crop_enabled = self.chk_auto_crop.isChecked()
+            
             self.log_edit.clear()
             self.log_message(f"--- Начало сессии кодирования (битрейт {target_bitrate}M) ---", "info")
             self.log_message(f"Папка вывода: {self.output_directory}", "info")
@@ -422,6 +487,9 @@ class MainWindow(QMainWindow):
                 self.log_message(f"Принудительное разрешение: {w}x{h}", "info")
             else:
                 self.log_message(f"Используется исходное разрешение файлов.", "info")
+            
+            self.processed_files_count = 0 # <--- Сбрасываем счетчик перед новым запуском
+            self.update_overall_progress_display() # Обновляем отображение (0/total)
 
             self.encoder_thread = QThread()
             self.encoder_worker = EncoderWorker(
@@ -431,19 +499,20 @@ class MainWindow(QMainWindow):
                 self.output_directory,
                 force_res_checked, # Передаем актуальный флаг
                 selected_resolution_data, # Передаем кортеж (width, height) или None
-                use_lossless_mode
+                use_lossless_mode,
+                auto_crop_enabled
             )
             self.encoder_worker.moveToThread(self.encoder_thread)
 
             # Подключение сигналов
             self.encoder_worker.progress.connect(self.update_current_file_progress)
             self.encoder_worker.log_message.connect(self.log_message)
-            self.encoder_worker.file_processed.connect(self.on_file_processed)
-            self.encoder_worker.overall_progress.connect(self.update_overall_progress_display)
+            self.encoder_worker.file_processed.connect(self.on_file_processed) # <--- Этот сигнал будет ключевым
+            self.encoder_worker.overall_progress.connect(self.update_overall_progress_label) # <--- Новый слот для метки
             self.encoder_worker.finished.connect(self.on_encoding_finished)
             
             self.encoder_thread.started.connect(self.encoder_worker.run)
-            self.encoder_thread.finished.connect(self.encoder_thread.deleteLater) # Очистка потока
+            self.encoder_thread.finished.connect(self.encoder_thread.deleteLater)
 
             self.encoder_thread.start()
 
@@ -454,8 +523,13 @@ class MainWindow(QMainWindow):
         self.btn_select_files.setEnabled(enabled)
         # self.spin_target_bitrate.setEnabled(enabled) # Теперь управляется через self.bitrate_controls_widget
         self.btn_select_output_dir.setEnabled(enabled)
+        self.btn_open_output_dir.setEnabled(True) # Кнопка "Открыть" всегда активна, если путь валиден
+                                                # (или можно привязать к enabled тоже, если не хотим давать открывать во время кодирования)
+                                                # Давайте привяжем к enabled, чтобы избежать открытия во время активного процесса
+        self.btn_open_output_dir.setEnabled(enabled)
         self.chk_force_resolution.setEnabled(enabled)
         self.chk_lossless_mode.setEnabled(enabled) # <--- Управляем доступностью чекбокса lossless
+        self.chk_auto_crop.setEnabled(enabled)
         # Комбобокс разрешения управляется состоянием чекбокса, но его тоже блокируем/разблокируем
         if enabled:
             # Если контролы включаются, состояние комбобокса зависит от чекбокса
@@ -472,18 +546,37 @@ class MainWindow(QMainWindow):
         self.progress_bar_current_file.setValue(percentage)
         self.lbl_current_file_progress.setText(f"Файл: {status_text}")
 
-    def update_overall_progress_display(self, current_num, total_num):
-        self.lbl_overall_progress.setText(f"Общий прогресс: {current_num}/{total_num}")
-        if total_num > 0:
-            self.progress_bar_overall.setValue(int((current_num / total_num) * 100) if current_num <= total_num else 100)
+    def update_overall_progress_display(self):
+        """Обновляет QProgressBar общего прогресса на основе счетчика."""
+        total_files = len(self.files_to_process)
+        if total_files > 0:
+            percentage = int((self.processed_files_count / total_files) * 100)
+            self.progress_bar_overall.setValue(percentage)
         else:
             self.progress_bar_overall.setValue(0)
+        
+        # Также обновим метку, чтобы она показывала количество завершенных
+        # или "Готово", если все завершено.
+        if self.processed_files_count == total_files and total_files > 0:
+            self.lbl_overall_progress.setText(f"Завершено: {self.processed_files_count}/{total_files}")
+        elif total_files > 0 : # Если еще не все, но есть общее количество
+            self.lbl_overall_progress.setText(f"Завершено: {self.processed_files_count}/{total_files}")
+        else: # Если файлов нет или еще не начато
+            self.lbl_overall_progress.setText("Общий прогресс: -/-")
+    
+    
+    def update_overall_progress_label(self, current_num_processing, total_num):
+        """Обновляет только текстовую метку общего прогресса."""
+        self.lbl_overall_progress.setText(f"Обработка файла: {current_num_processing}/{total_num}")
+        # QProgressBar здесь НЕ обновляется
 
 
     def on_file_processed(self, filename, success, message):
-        # Можно добавить визуальное обозначение в QListWidget, но это усложнит
         level = "success" if success else "error"
         self.log_message(f"Обработка файла {filename} завершена. Статус: {'Успех' if success else 'Ошибка'}. {message}", level)
+        
+        self.processed_files_count += 1 # <--- Увеличиваем счетчик завершенных файлов
+        self.update_overall_progress_display() # <--- Обновляем QProgressBar и метку
 
 
     def on_encoding_finished(self):
@@ -492,17 +585,17 @@ class MainWindow(QMainWindow):
         self.btn_start_stop.setEnabled(True)
         self.set_controls_enabled(True)
         
-        if self.encoder_thread: # Если поток еще существует
+        if self.encoder_thread: 
             self.encoder_thread.quit()
-            self.encoder_thread.wait(2000) # Даем время потоку завершиться корректно
+            self.encoder_thread.wait(2000)
         
-        self.encoder_thread = None # Сброс
-        self.encoder_worker = None # Сброс
+        self.encoder_thread = None 
+        self.encoder_worker = None 
         
-        # Сбрасываем прогресс бары, но не текст над ними
-        # self.progress_bar_current_file.setValue(0) 
-        # self.lbl_current_file_progress.setText("Текущий файл: -") # Это лучше делать при старте нового файла
-        # self.progress_bar_overall.setValue(0) # Это тоже при старте
+        # Убедимся, что прогресс-бар показывает 100%, если все файлы обработаны
+        # (даже если последний файл вызвал ошибку, он все равно "обработан")
+        # Но это уже должно быть сделано в on_file_processed
+        self.update_overall_progress_display() # Просто для финального обновления метки
         
         QMessageBox.information(self, "Завершено", "Обработка всех файлов завершена.")
 
