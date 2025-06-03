@@ -88,7 +88,7 @@ class MainWindow(QMainWindow):
         # -- Группа настроек битрейта / качества --
         bitrate_quality_group = QVBoxLayout() # Переименуем для ясности
 
-        self.chk_lossless_mode = QCheckBox("Режим 'почти без потерь' (QP=0)")
+        self.chk_lossless_mode = QCheckBox("Lossless кодирование")
         self.chk_lossless_mode.stateChanged.connect(self.toggle_bitrate_settings_availability)
         bitrate_quality_group.addWidget(self.chk_lossless_mode)
 

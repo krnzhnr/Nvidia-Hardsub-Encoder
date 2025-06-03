@@ -273,9 +273,16 @@ class EncoderWorker(QObject):
                 }
                 
                 if self.use_lossless_mode:
-                    enc_settings['rc_mode'] = 'constqp'
+                    enc_settings['preset'] = 'lossless' # <--- УСТАНАВЛИВАЕМ PRESET LOSSLESS
+                    enc_settings['rc_mode'] = 'constqp'  # <--- УСТАНАВЛИВАЕМ RC constqp
                     enc_settings['qp_value'] = LOSSLESS_QP_VALUE
-                    self._log(f"  Режим кодирования: Постоянное качество (QP={LOSSLESS_QP_VALUE})", "info")
+                    
+                    # Для чистоты удалим параметры, нерелевантные для lossless QP=0
+                    # (хотя build_ffmpeg_command их и так не добавит, если rc='constqp' или подобный)
+                    for key_to_remove in ['target_bitrate', 'min_bitrate', 'max_bitrate', 'bufsize']:
+                        enc_settings.pop(key_to_remove, None)
+                    
+                    self._log(f"  Режим кодирования: Без потерь (Preset: {enc_settings['preset']}, RC: {enc_settings['rc_mode']}, QP: {enc_settings['qp_value']})", "info")
                 else:
                     target_br_str = f"{self.target_bitrate_mbps}M"
                     max_br_val = self.target_bitrate_mbps * 2
@@ -283,12 +290,13 @@ class EncoderWorker(QObject):
                     buf_size_val = max_br_val * 2
                     buf_size_str = f"{buf_size_val}M"
                     
+                    enc_settings['preset'] = NVENC_PRESET # Берем из config
                     enc_settings['rc_mode'] = NVENC_RC # NVENC_RC из config (например, 'vbr')
                     enc_settings['target_bitrate'] = target_br_str
                     enc_settings['min_bitrate'] = target_br_str # или другая логика
                     enc_settings['max_bitrate'] = max_br_str
                     enc_settings['bufsize'] = buf_size_str
-                    self._log(f"  Режим кодирования: Переменный битрейт (Целевой={target_br_str}, Мин={target_br_str}, Макс={max_br_str}, Буфер={buf_size_str})", "info")
+                    self._log(f"  Режим кодирования: Переменный битрейт (Preset: {enc_settings['preset']}, RC: {enc_settings['rc_mode']}, Целевой={target_br_str}, Мин={target_br_str}, Макс={max_br_str}, Буфер={buf_size_str})", "info")
 
                 ffmpeg_command, dec_name, enc_name = build_ffmpeg_command(
                     input_file_path, output_file_path, self.hw_info, input_codec,
