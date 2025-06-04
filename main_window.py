@@ -14,7 +14,8 @@ import subprocess # Для open/xdg-open на Linux/macOS
 
 from config import (
     APP_DIR, VIDEO_EXTENSIONS, DEFAULT_TARGET_V_BITRATE_MBPS,
-    FFMPEG_PATH, FFPROBE_PATH, FONTS_SUBDIR, OUTPUT_SUBDIR
+    FFMPEG_PATH, FFPROBE_PATH, FONTS_SUBDIR, OUTPUT_SUBDIR,
+    LOSSLESS_QP_VALUE
 )
 from ffmpeg_utils import check_executable, detect_nvidia_hardware, get_video_resolution
 from encoder_worker import EncoderWorker
@@ -87,8 +88,16 @@ class MainWindow(QMainWindow):
 
         # -- Группа настроек битрейта / качества --
         bitrate_quality_group = QVBoxLayout() # Переименуем для ясности
+        
+        # --- НОВЫЙ ЧЕКБОКС ДЛЯ 10-БИТ ---
+        self.chk_force_10bit = QCheckBox("10-бит (HEVC Main10)")
+        self.chk_force_10bit.setToolTip("Принудительно кодировать в 10-битном цвете.\nМожет немного увеличить размер файла и время, но улучшает качество градиентов.")
+        # Этот чекбокс может быть независимым или его доступность может зависеть от других опций.
+        # Пока сделаем его независимым.
+        bitrate_quality_group.addWidget(self.chk_force_10bit)
+        # -----------------------------------
 
-        self.chk_lossless_mode = QCheckBox("Lossless кодирование")
+        self.chk_lossless_mode = QCheckBox("Lossless")
         self.chk_lossless_mode.stateChanged.connect(self.toggle_bitrate_settings_availability)
         bitrate_quality_group.addWidget(self.chk_lossless_mode)
 
@@ -239,16 +248,19 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "Ошибка открытия папки", 
                                     f"Не удалось открыть папку:\n{directory_path}\n\nОшибка: {e}")
         else:
-             self.log_message(f"Папка {directory_path} открыта через QDesktopServices.", "info")
+            self.log_message(f"Папка {directory_path} открыта через QDesktopServices.", "info")
     
     def toggle_bitrate_settings_availability(self, state):
         is_lossless_checked = (state == Qt.CheckState.Checked.value)
         # Делаем контролы битрейта неактивными, если выбран режим "почти без потерь"
         self.bitrate_controls_widget.setEnabled(not is_lossless_checked)
         if is_lossless_checked:
-            self.log_message("Активирован режим 'почти без потерь' (QP=0). Настройки битрейта игнорируются.", "info")
+            self.log_message("Активирован режим Lossless. Настройки битрейта игнорируются.", "info")
+            # Можно автоматически включить 10-бит, если lossless, но это уже будет в worker
+            self.chk_force_10bit.setChecked(True) # Опционально: если lossless, то всегда 10 бит
         else:
-            self.log_message("Режим 'почти без потерь' деактивирован. Используются настройки битрейта.", "info")
+            self.log_message("Режим Lossless деактивирован. Используются настройки битрейта.", "info")
+            self.chk_force_10bit.setChecked(False) # Опционально: если не lossless, сбросить 10 бит (или оставить на усмотрение пользователя)
 
     def toggle_resolution_combobox(self, state):
         self.combo_resolution.setEnabled(state == Qt.CheckState.Checked.value)
@@ -463,6 +475,8 @@ class MainWindow(QMainWindow):
                 return
 
             use_lossless_mode = self.chk_lossless_mode.isChecked()
+            force_10bit_output = self.chk_force_10bit.isChecked()
+            
             target_bitrate = 0 # По умолчанию, если lossless
             if not use_lossless_mode:
                 target_bitrate = self.spin_target_bitrate.value()
@@ -479,7 +493,19 @@ class MainWindow(QMainWindow):
             auto_crop_enabled = self.chk_auto_crop.isChecked()
             
             self.log_edit.clear()
-            self.log_message(f"--- Начало сессии кодирования (битрейт {target_bitrate}M) ---", "info")
+            # Формируем строку о режиме кодирования
+            encoding_mode_str = []
+            if use_lossless_mode:
+                encoding_mode_str.append(f"Lossless (QP={LOSSLESS_QP_VALUE})")
+            else:
+                encoding_mode_str.append(f"Битрейт {target_bitrate}M")
+            
+            if force_10bit_output:
+                encoding_mode_str.append("10-бит")
+            else:
+                encoding_mode_str.append("8-бит") # Если не принудительно 10, то по умолчанию будет 8 (или 10, если lossless)
+            
+            self.log_message(f"--- Начало сессии кодирования ({', '.join(encoding_mode_str)}) ---", "info")
             self.log_message(f"Папка вывода: {self.output_directory}", "info")
 
             if force_res_checked and selected_resolution_data:
@@ -500,7 +526,8 @@ class MainWindow(QMainWindow):
                 force_res_checked, # Передаем актуальный флаг
                 selected_resolution_data, # Передаем кортеж (width, height) или None
                 use_lossless_mode,
-                auto_crop_enabled
+                auto_crop_enabled,
+                force_10bit_output
             )
             self.encoder_worker.moveToThread(self.encoder_thread)
 
@@ -529,6 +556,7 @@ class MainWindow(QMainWindow):
         self.btn_open_output_dir.setEnabled(enabled)
         self.chk_force_resolution.setEnabled(enabled)
         self.chk_lossless_mode.setEnabled(enabled) # <--- Управляем доступностью чекбокса lossless
+        self.chk_force_10bit.setEnabled(enabled)
         self.chk_auto_crop.setEnabled(enabled)
         # Комбобокс разрешения управляется состоянием чекбокса, но его тоже блокируем/разблокируем
         if enabled:

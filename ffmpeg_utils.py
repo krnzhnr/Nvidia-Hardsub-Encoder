@@ -338,13 +338,12 @@ def build_ffmpeg_command(input_file: Path, output_file: Path, hw_info: dict,
             vf_items.append(scale_filter_str)
     
     # --- ОПРЕДЕЛЕНИЕ ВЫХОДНОГО ФОРМАТА ПИКСЕЛЕЙ И ПРОФИЛЯ ---
-    output_pixel_format_for_vf = "yuv420p" # По умолчанию для 8-bit
-    output_profile = "main" # По умолчанию для 8-bit
-
-    if enc_settings.get('use_lossless_mode', False):
-        # Если lossless режим, принудительно ставим 10-бит и профиль main10
+    if enc_settings.get('force_10bit_output', False):
         output_pixel_format_for_vf = "p010le"
         output_profile = "main10"
+    else: # Если галочка "10-бит" не стоит, всегда 8-бит
+        output_pixel_format_for_vf = "yuv420p"
+        output_profile = "main"
     # ---------------------------------------------------------
 
     burn_subtitles = subtitle_temp_file_path and hw_info.get('subtitles_filter', False)
@@ -381,36 +380,14 @@ def build_ffmpeg_command(input_file: Path, output_file: Path, hw_info: dict,
         # rc_mode и связанные параметры теперь зависят от use_lossless_mode
     ]
 
-    # Если пресет 'lossless' или 'losslesshp', то rc и qp могут быть не нужны или конфликтовать
-    is_true_lossless_preset = enc_settings.get('preset', '').startswith('lossless')
-
-    if is_true_lossless_preset:
-        # Для пресетов lossless, часто rc и qp не указываются, 
-        # или используется rc constqp с очень низким qp (но не всегда 0)
-        # или rc lossless (если такой есть в конкретной реализации nvenc)
-        # Попробуем с constqp и qp_value, как основной вариант.
-        # Если это не сработает, то для 'lossless' пресета можно попробовать УБРАТЬ -rc и -qp.
-        if 'qp_value' in enc_settings and enc_settings.get('rc_mode') == 'constqp':
-            encoder_opts.extend([
-                '-rc', 'constqp',
-                '-qp', str(enc_settings['qp_value'])
-            ])
-        # Если rc_mode был vbr_hq для lossless, это могло быть проблемой.
-        # Если выбран preset lossless, но rc_mode не constqp, то возможно, rc и qp не нужны:
-        # elif is_true_lossless_preset:
-        #    pass # Не добавляем -rc и -qp, полагаемся на пресет
-
-    elif enc_settings.get('use_lossless_mode', False) and 'qp_value' in enc_settings: 
-        # Этот блок для случая, если use_lossless_mode=True, но preset НЕ 'lossless'
-        # (например, пользователь хочет p7 + qp=0, что странно, но возможно)
-        # Тогда rc_mode будет 'constqp' из enc_settings
+    # Логика для rc и qp/bitrate
+    if enc_settings.get('rc_mode') == 'constqp' and 'qp_value' in enc_settings:
+        # Это будет использоваться для lossless, если rc_mode = 'constqp'
+        # Или для не-lossless, если пользователь как-то умудрится выбрать constqp (хотя GUI это не позволяет напрямую)
+        encoder_opts.extend(['-rc', 'constqp', '-qp', str(enc_settings['qp_value'])])
+    elif 'target_bitrate' in enc_settings: # Обычный режим с битрейтом
         encoder_opts.extend([
-            '-rc', enc_settings['rc_mode'], # Должен быть 'constqp'
-            '-qp', str(enc_settings['qp_value'])
-        ])
-    else: # Обычный режим с битрейтом
-        encoder_opts.extend([
-            '-rc', enc_settings['rc_mode'],
+            '-rc', enc_settings['rc_mode'], 
             '-b:v', enc_settings['target_bitrate'],
             '-minrate', enc_settings['min_bitrate'],
             '-maxrate', enc_settings['max_bitrate'],
@@ -418,13 +395,16 @@ def build_ffmpeg_command(input_file: Path, output_file: Path, hw_info: dict,
         ])
     
     # Общие параметры
-    # Для lossless пресета некоторые из них могут не иметь смысла или игнорироваться
-    if not is_true_lossless_preset: # Не добавляем для true lossless, они могут конфликтовать
-        encoder_opts.extend([
-            '-rc-lookahead', enc_settings['lookahead'],
-            '-spatial-aq', enc_settings['spatial_aq'],
-            '-aq-strength', enc_settings['aq_strength'],
-        ])
+    # Для пресета 'lossless' или если используется 'constqp', некоторые из них могут не иметь смысла
+    # или даже конфликтовать. Уточненное условие:
+    if not (enc_settings.get('preset') == 'lossless' or enc_settings.get('rc_mode') == 'constqp'):
+        if 'lookahead' in enc_settings:
+            encoder_opts.extend(['-rc-lookahead', enc_settings['lookahead']])
+        if 'spatial_aq' in enc_settings:
+            encoder_opts.extend(['-spatial-aq', enc_settings['spatial_aq']])
+            if enc_settings['spatial_aq'] == '1' and 'aq_strength' in enc_settings:
+                encoder_opts.extend(['-aq-strength', enc_settings['aq_strength']])
+            
     encoder_opts.extend(['-multipass', '0'])
     
     command.extend(encoder_opts)

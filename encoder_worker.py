@@ -34,7 +34,8 @@ class EncoderWorker(QObject):
                 force_resolution: bool,
                 selected_resolution_option: tuple | None,
                 use_lossless_mode: bool,
-                auto_crop_enabled: bool):
+                auto_crop_enabled: bool,
+                force_10bit_output: bool):
         super().__init__()
         self.files_to_process = [Path(f) for f in files_to_process]
         self.target_bitrate_mbps = target_bitrate_mbps
@@ -42,6 +43,7 @@ class EncoderWorker(QObject):
         self.output_directory = output_directory
         self.force_resolution = force_resolution
         self.use_lossless_mode = use_lossless_mode
+        self.force_10bit_output = force_10bit_output
         self.auto_crop_enabled = auto_crop_enabled
         self.selected_target_width = None
         self.selected_target_height = None
@@ -269,20 +271,21 @@ class EncoderWorker(QObject):
                     'aq_strength': NVENC_AQ_STRENGTH,
                     'audio_track_title': DEFAULT_AUDIO_TRACK_TITLE,
                     'audio_track_language': DEFAULT_AUDIO_TRACK_LANGUAGE,
-                    'use_lossless_mode': self.use_lossless_mode 
+                    'use_lossless_mode': self.use_lossless_mode,
+                    'force_10bit_output': self.force_10bit_output
                 }
                 
+                log_parts = [] # Для формирования строки лога о режиме
+
                 if self.use_lossless_mode:
-                    enc_settings['preset'] = 'lossless' # <--- УСТАНАВЛИВАЕМ PRESET LOSSLESS
-                    enc_settings['rc_mode'] = 'constqp'  # <--- УСТАНАВЛИВАЕМ RC constqp
-                    enc_settings['qp_value'] = LOSSLESS_QP_VALUE
+                    enc_settings['preset'] = 'lossless'
+                    enc_settings['rc_mode'] = 'constqp' 
+                    enc_settings['qp_value'] = LOSSLESS_QP_VALUE 
                     
-                    # Для чистоты удалим параметры, нерелевантные для lossless QP=0
-                    # (хотя build_ffmpeg_command их и так не добавит, если rc='constqp' или подобный)
                     for key_to_remove in ['target_bitrate', 'min_bitrate', 'max_bitrate', 'bufsize']:
                         enc_settings.pop(key_to_remove, None)
                     
-                    self._log(f"  Режим кодирования: Без потерь (Preset: {enc_settings['preset']}, RC: {enc_settings['rc_mode']}, QP: {enc_settings['qp_value']})", "info")
+                    log_parts.append(f"Lossless (Preset: {enc_settings['preset']}, RC: {enc_settings['rc_mode']}, QP: {enc_settings['qp_value']})")
                 else:
                     target_br_str = f"{self.target_bitrate_mbps}M"
                     max_br_val = self.target_bitrate_mbps * 2
@@ -290,13 +293,15 @@ class EncoderWorker(QObject):
                     buf_size_val = max_br_val * 2
                     buf_size_str = f"{buf_size_val}M"
                     
-                    enc_settings['preset'] = NVENC_PRESET # Берем из config
-                    enc_settings['rc_mode'] = NVENC_RC # NVENC_RC из config (например, 'vbr')
                     enc_settings['target_bitrate'] = target_br_str
-                    enc_settings['min_bitrate'] = target_br_str # или другая логика
+                    enc_settings['min_bitrate'] = target_br_str 
                     enc_settings['max_bitrate'] = max_br_str
                     enc_settings['bufsize'] = buf_size_str
-                    self._log(f"  Режим кодирования: Переменный битрейт (Preset: {enc_settings['preset']}, RC: {enc_settings['rc_mode']}, Целевой={target_br_str}, Мин={target_br_str}, Макс={max_br_str}, Буфер={buf_size_str})", "info")
+                    log_parts.append(f"Битрейт (Preset: {enc_settings['preset']}, RC: {enc_settings['rc_mode']}, Целевой={target_br_str})")
+                
+                is_10bit_active = self.force_10bit_output # Битность определяется только этой галочкой
+                log_parts.append("10-бит" if is_10bit_active else "8-бит")
+                self._log(f"  Режим кодирования: {', '.join(log_parts)}", "info")
 
                 ffmpeg_command, dec_name, enc_name = build_ffmpeg_command(
                     input_file_path, output_file_path, self.hw_info, input_codec,
