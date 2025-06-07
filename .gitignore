@@ -160,3 +160,4 @@ cython_debug/
 #.idea/
 *.exe
 /ENCODED_HEVC_NVIDIA_GUI
+*.mkv

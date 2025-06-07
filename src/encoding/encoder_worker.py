@@ -1,25 +1,29 @@
-# encoder_worker.py
+# src/encoding/encoder_worker.py
 from PyQt6.QtCore import QObject, pyqtSignal, QThread
 from pathlib import Path
 import subprocess
 import platform
 import tempfile
 import shutil
-import re # Добавим re для parse_ffmpeg_output_for_progress, если он будет здесь
+import re
 
-from config import (
-    APP_DIR, OUTPUT_SUBDIR, FFMPEG_PATH,
+# Обновленные импорты
+from src.app_config import (
+    APP_DIR, OUTPUT_SUBDIR, FFMPEG_PATH, # FFMPEG_PATH здесь не используется напрямую, но может понадобиться для логов
     AUDIO_CODEC, AUDIO_BITRATE, AUDIO_CHANNELS,
     NVENC_PRESET, NVENC_TUNING, NVENC_RC, NVENC_LOOKAHEAD,
     NVENC_AQ, NVENC_AQ_STRENGTH, SUBTITLE_TRACK_TITLE_KEYWORD,
     FONTS_SUBDIR, DEFAULT_AUDIO_TRACK_LANGUAGE,
     DEFAULT_AUDIO_TRACK_TITLE, LOSSLESS_QP_VALUE
 )
-from ffmpeg_utils import (
-    get_video_subtitle_attachment_info, build_ffmpeg_command,
-    parse_ffmpeg_output_for_progress, extract_attachments,
-    extract_subtitle_track, get_crop_parameters
-)
+# Импорты из новых модулей ffmpeg
+from src.ffmpeg.info import get_video_subtitle_attachment_info
+from src.ffmpeg.command import build_ffmpeg_command
+from src.ffmpeg.progress import parse_ffmpeg_output_for_progress
+from src.ffmpeg.attachments import extract_attachments
+from src.ffmpeg.subtitles import extract_subtitle_track
+from src.ffmpeg.crop import get_crop_parameters
+from src.ffmpeg.utils import sanitize_filename_part
 
 class EncoderWorker(QObject):
     # Сигналы
@@ -98,13 +102,20 @@ class EncoderWorker(QObject):
             # tempfile.mkdtemp() по умолчанию создает в системной.
             current_file_temp_dir = None
             try:
-                current_file_temp_dir_path = Path(tempfile.mkdtemp(prefix=f"enc_{input_file_path.stem}_"))
-                current_file_temp_dir = current_file_temp_dir_path # Сохраняем Path объект
+                # Санитизация имени для префикса временной папки
+                sane_stem = sanitize_filename_part(input_file_path.stem, max_length=40) # Ограничим длину
+                temp_dir_prefix = f"enc_{sane_stem}_"
+                current_file_temp_dir_path = Path(tempfile.mkdtemp(prefix=temp_dir_prefix))
+                current_file_temp_dir = current_file_temp_dir_path
                 self._log(f"  Создана временная папка: {current_file_temp_dir_path.name}", "debug")
             except Exception as e:
                 self._log(f"  Не удалось создать временную папку для {input_file_path.name}: {e}", "error")
                 self.file_processed.emit(input_file_path.name, False, "Ошибка создания временной папки")
-                continue # К следующему файлу
+                return # Исправлено с continue на return, если мы не в цикле по файлам на этом уровне
+                    # Если это в цикле по файлам, то continue
+            # Если это начало цикла for i, input_file_path in enumerate(self.files_to_process):
+            # то `continue` будет правильным, чтобы перейти к следующему файлу.
+            # Судя по коду, это внутри цикла, так что `continue` корректно.
 
             subtitle_temp_file = None
             extracted_fonts_dir = None # Это будет путь к папке внутри current_file_temp_dir
@@ -172,15 +183,24 @@ class EncoderWorker(QObject):
 
                 if font_attachments:
                     self._log(f"    Встроенные шрифты: {len(font_attachments)} шт.", "info")
-                    fonts_temp_sub_dir = current_file_temp_dir / "extracted_fonts"
+                    # Папка, куда будут извлекаться шрифты
+                    fonts_extraction_target_dir = current_file_temp_dir / "extracted_fonts" 
                     try:
-                        fonts_temp_sub_dir.mkdir(exist_ok=True)
-                        if extract_attachments(input_file_path, font_attachments, fonts_temp_sub_dir, self._log) > 0:
-                            extracted_fonts_dir = str(fonts_temp_sub_dir) # Передаем путь как строку
+                        fonts_extraction_target_dir.mkdir(parents=True, exist_ok=True) # parents=True на случай, если current_file_temp_dir еще не создан
+                        
+                        # Передаем именно эту папку в extract_attachments
+                        if extract_attachments(input_file_path, font_attachments, fonts_extraction_target_dir, self._log) > 0:
+                            extracted_fonts_dir = str(fonts_extraction_target_dir) # Путь к папке с извлеченными шрифтами
+                            self._log(f"    Шрифты извлечены в: {extracted_fonts_dir}", "info")
+                        else:
+                            self._log(f"    Не удалось извлечь шрифты в {fonts_extraction_target_dir}", "warning")
+                            extracted_fonts_dir = None 
                     except Exception as e_mkdir_font:
-                        self._log(f"    Ошибка создания папки для извлеченных шрифтов: {e_mkdir_font}", "error")
+                        self._log(f"    Ошибка создания папки для извлеченных шрифтов ({fonts_extraction_target_dir}): {e_mkdir_font}", "error")
+                        extracted_fonts_dir = None
                 else:
                     self._log(f"    Встроенные шрифты: Не найдены", "info")
+                    extracted_fonts_dir = None
 
                 if subtitle_info and self.hw_info.get('subtitles_filter'):
                     subtitle_temp_file = extract_subtitle_track(input_file_path, subtitle_info, current_file_temp_dir, self._log)

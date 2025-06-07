@@ -18,7 +18,7 @@ from config import (
     LOSSLESS_QP_VALUE
 )
 from ffmpeg_utils import check_executable, detect_nvidia_hardware, get_video_resolution
-from encoder_worker import EncoderWorker
+from src.encoding.encoder_worker import EncoderWorker
 
 class MainWindow(QMainWindow):
     def __init__(self):
