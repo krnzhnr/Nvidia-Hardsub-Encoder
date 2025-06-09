@@ -9,7 +9,8 @@ def build_ffmpeg_command(
     input_file: Path, 
     output_file: Path, 
     hw_info: dict,
-    input_codec: str, 
+    input_codec: str,
+    pix_fmt: str,
     enc_settings: dict,
     subtitle_temp_file_path: str | None = None,
     temp_fonts_dir_path: str | None = None,
@@ -30,13 +31,24 @@ def build_ffmpeg_command(
 
     decoder_name = 'cpu (по умолчанию)'
     explicit_decoder = hw_info.get('decoder_map', {}).get(input_codec)
+    use_hw_decoder = False # По умолчанию не используем
     
     frames_on_gpu = False # Отслеживаем, где находятся кадры
 
     if explicit_decoder:
+        # Проверяем, можно ли использовать аппаратный декодер
+        if input_codec == 'h264' and '10' in pix_fmt:
+            # Это особый случай: 10-битный H.264, который NVDEC не поддерживает.
+            # Оставляем use_hw_decoder = False, используем CPU.
+            decoder_name = 'cpu (fallback for 10-bit H.264)'
+        else:
+            # Для всех остальных случаев (8-бит H.264, HEVC, VP9 и т.д.) HW-декодер можно использовать.
+            use_hw_decoder = True
+
+    if use_hw_decoder:
         command.extend(['-c:v', explicit_decoder])
         decoder_name = explicit_decoder
-    
+    # Если use_hw_decoder остался False, команда -c:v не добавляется, FFmpeg выберет CPU-декодер сам.
     command.extend(['-i', str(input_file)])
 
     vf_items = []

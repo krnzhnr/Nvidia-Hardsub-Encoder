@@ -1,26 +1,26 @@
-# main_window.py
+# src/ui/main_window.py
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QListWidget, QProgressBar, QTextEdit,
     QLabel, QFileDialog, QLineEdit, QMessageBox, QSpinBox,
-    QScrollArea, QSizePolicy, QSpacerItem, QComboBox, QCheckBox
+    QScrollArea, QSizePolicy, QSpacerItem, QComboBox, QCheckBox,
+    QInputDialog # <-- НОВЫЙ ИМПОРТ
 )
-from PyQt6.QtCore import Qt, QThread, QCoreApplication, QUrl # QDir может быть полезен, но не обязателен
-from PyQt6.QtGui import QPalette, QColor, QTextCursor, QDesktopServices # Для открытия папки
+from PyQt6.QtCore import Qt, QThread, QCoreApplication, QUrl, pyqtSlot, QMetaObject # <-- НОВЫЕ ИМПОРТЫ
+from PyQt6.QtGui import QPalette, QColor, QTextCursor, QDesktopServices
 from pathlib import Path
-import os # Для os.startfile на Windows
-import platform # Для определения ОС
-import subprocess # Для open/xdg-open на Linux/macOS
+import os
+import platform
+import subprocess
 
-# Обновленные импорты
 from src.app_config import (
     APP_DIR, VIDEO_EXTENSIONS, DEFAULT_TARGET_V_BITRATE_MBPS,
     FFMPEG_PATH, FFPROBE_PATH, FONTS_SUBDIR, OUTPUT_SUBDIR,
-    LOSSLESS_QP_VALUE
+    LOSSLESS_QP_VALUE, SUBTITLE_TRACK_TITLE_KEYWORD
 )
 from src.ffmpeg.core import check_executable
 from src.ffmpeg.detection import detect_nvidia_hardware
-from src.ffmpeg.info import get_video_resolution # get_video_resolution теперь здесь
+from src.ffmpeg.info import get_video_resolution
 from src.encoding.encoder_worker import EncoderWorker
 
 class MainWindow(QMainWindow):
@@ -41,6 +41,7 @@ class MainWindow(QMainWindow):
         self.init_ui()
         self.check_system_components()
 
+    # ... (init_ui и другие методы до toggle_bitrate_settings_availability без изменений) ...
     def init_ui(self):
         main_widget = QWidget()
         self.setCentralWidget(main_widget)
@@ -93,7 +94,7 @@ class MainWindow(QMainWindow):
         bitrate_quality_group = QVBoxLayout() # Переименуем для ясности
         
         # --- НОВЫЙ ЧЕКБОКС ДЛЯ 10-БИТ ---
-        self.chk_force_10bit = QCheckBox("10-бит (HEVC Main10)")
+        self.chk_force_10bit = QCheckBox("Принудительный 10-бит (HEVC Main10)")
         self.chk_force_10bit.setToolTip("Принудительно кодировать в 10-битном цвете.\nМожет немного увеличить размер файла и время, но улучшает качество градиентов.")
         # Этот чекбокс может быть независимым или его доступность может зависеть от других опций.
         # Пока сделаем его независимым.
@@ -196,7 +197,7 @@ class MainWindow(QMainWindow):
         scroll_area_logs.setWidget(self.log_edit)
         scroll_area_logs.setMinimumHeight(150) # Минимальная высота для логов
         layout.addWidget(scroll_area_logs, 1)
-    
+        
     def select_output_directory(self):
         directory = QFileDialog.getExistingDirectory(
             self,
@@ -252,19 +253,19 @@ class MainWindow(QMainWindow):
                                     f"Не удалось открыть папку:\n{directory_path}\n\nОшибка: {e}")
         else:
             self.log_message(f"Папка {directory_path} открыта через QDesktopServices.", "info")
-    
+            
     def toggle_bitrate_settings_availability(self, state):
         is_lossless_checked = (state == Qt.CheckState.Checked.value)
-        # Делаем контролы битрейта неактивными, если выбран режим "почти без потерь"
         self.bitrate_controls_widget.setEnabled(not is_lossless_checked)
         if is_lossless_checked:
             self.log_message("Активирован режим Lossless. Настройки битрейта игнорируются.", "info")
-            # Можно автоматически включить 10-бит, если lossless, но это уже будет в worker
-            self.chk_force_10bit.setChecked(True) # Опционально: если lossless, то всегда 10 бит
+            # БОЛЬШЕ НЕТ АВТОВКЛЮЧЕНИЯ 10-БИТ ЗДЕСЬ
+            # self.chk_force_10bit.setChecked(True) # <-- СТРОКА УДАЛЕНА
         else:
             self.log_message("Режим Lossless деактивирован. Используются настройки битрейта.", "info")
-            self.chk_force_10bit.setChecked(False) # Опционально: если не lossless, сбросить 10 бит (или оставить на усмотрение пользователя)
-
+            # БОЛЬШЕ НЕТ АВТОВЫКЛЮЧЕНИЯ 10-БИТ ЗДЕСЬ
+            # self.chk_force_10bit.setChecked(False) # <-- СТРОКА УДАЛЕНА
+    
     def toggle_resolution_combobox(self, state):
         self.combo_resolution.setEnabled(state == Qt.CheckState.Checked.value)
 
@@ -460,6 +461,45 @@ class MainWindow(QMainWindow):
                         self.combo_resolution.setCurrentIndex(i)
                         break
 
+    # НОВЫЙ СЛОТ ДЛЯ ВЫЗОВА ДИАЛОГА ИЗ РАБОЧЕГО ПОТОКА
+    @pyqtSlot(list, str, result='QVariant')
+    def prompt_for_subtitle_selection(self, available_tracks, filename):
+        """
+        Показывает диалог выбора дорожки субтитров. Вызывается из потока EncoderWorker.
+        Возвращает словарь выбранной дорожки или None.
+        """
+        # Формируем список для диалога
+        # Добавляем специальный пункт для отмены
+        dont_burn_text = "Не вшивать субтитры"
+        items = [dont_burn_text]
+        # Сопоставление текста в диалоге с исходным словарем дорожки
+        track_map = {}
+
+        for track in available_tracks:
+            # Формируем читаемое название дорожки
+            title = track.get('title') or 'Без названия'
+            lang = track.get('language', '??')
+            idx = track['index']
+            item_text = f"#{idx}: [{lang}] {title}"
+            items.append(item_text)
+            track_map[item_text] = track
+
+        selected_item, ok = QInputDialog.getItem(
+            self,
+            "Выберите дорожку субтитров",
+            f"Для файла '{filename}' не найдены субтитры '{SUBTITLE_TRACK_TITLE_KEYWORD}'.\n"
+            "Выберите другую дорожку для вшивания или отмените операцию.",
+            items,
+            0, # Индекс по умолчанию (Не вшивать)
+            False # Нельзя редактировать
+        )
+
+        if ok and selected_item and selected_item != dont_burn_text:
+            # Пользователь выбрал дорожку
+            return track_map.get(selected_item) # Возвращаем словарь дорожки
+        else:
+            # Пользователь нажал "Отмена" или выбрал "Не вшивать"
+            return None # Возвращаем None
 
     def toggle_encoding(self):
         if self.encoder_thread and self.encoder_thread.isRunning():
@@ -504,9 +544,11 @@ class MainWindow(QMainWindow):
                 encoding_mode_str.append(f"Битрейт {target_bitrate}M")
             
             if force_10bit_output:
-                encoding_mode_str.append("10-бит")
+                # Если галочка стоит, это всегда принудительный режим
+                encoding_mode_str.append("10-бит (принудительно)")
             else:
-                encoding_mode_str.append("8-бит") # Если не принудительно 10, то по умолчанию будет 8 (или 10, если lossless)
+                # Если галочка снята, режим автоматический
+                encoding_mode_str.append("8/10-бит (авто)")
             
             self.log_message(f"--- Начало сессии кодирования ({', '.join(encoding_mode_str)}) ---", "info")
             self.log_message(f"Папка вывода: {self.output_directory}", "info")
@@ -522,23 +564,24 @@ class MainWindow(QMainWindow):
 
             self.encoder_thread = QThread()
             self.encoder_worker = EncoderWorker(
-                self.files_to_process,
-                target_bitrate, # Передаем 0, если lossless, иначе значение из spinbox
-                self.hw_info,
-                self.output_directory,
-                force_res_checked, # Передаем актуальный флаг
-                selected_resolution_data, # Передаем кортеж (width, height) или None
-                use_lossless_mode,
-                auto_crop_enabled,
-                force_10bit_output
+                files_to_process=self.files_to_process,
+                target_bitrate_mbps=target_bitrate,
+                hw_info=self.hw_info,
+                output_directory=self.output_directory,
+                force_resolution=force_res_checked,
+                selected_resolution_option=selected_resolution_data,
+                use_lossless_mode=use_lossless_mode,
+                auto_crop_enabled=auto_crop_enabled,
+                force_10bit_output=force_10bit_output,
+                parent_gui=self # <-- Передаем ссылку на главное окно
             )
             self.encoder_worker.moveToThread(self.encoder_thread)
 
             # Подключение сигналов
             self.encoder_worker.progress.connect(self.update_current_file_progress)
             self.encoder_worker.log_message.connect(self.log_message)
-            self.encoder_worker.file_processed.connect(self.on_file_processed) # <--- Этот сигнал будет ключевым
-            self.encoder_worker.overall_progress.connect(self.update_overall_progress_label) # <--- Новый слот для метки
+            self.encoder_worker.file_processed.connect(self.on_file_processed)
+            self.encoder_worker.overall_progress.connect(self.update_overall_progress_label)
             self.encoder_worker.finished.connect(self.on_encoding_finished)
             
             self.encoder_thread.started.connect(self.encoder_worker.run)

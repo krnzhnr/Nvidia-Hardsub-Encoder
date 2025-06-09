@@ -32,7 +32,7 @@ def get_video_resolution(filepath: Path) -> tuple[int | None, int | None, str | 
             width = int(width_str)
             height = int(height_str)
             if height % 2 != 0:
-                height -= 1 
+                height -= 1
             if width % 2 != 0:
                 width -= 1
             return width, height, None
@@ -46,25 +46,39 @@ def get_video_resolution(filepath: Path) -> tuple[int | None, int | None, str | 
     except Exception as e:
         return None, None, f"Ошибка получения разрешения ({filepath.name}): {e}"
 
-def get_video_subtitle_attachment_info(filepath: Path) -> tuple[float | None, str | None, int | None, int | None, dict | None, list, str | None]:
+def get_video_subtitle_attachment_info(filepath: Path) -> tuple[
+    float | None, str | None, str | None, int | None, int | None,
+    dict | None, list, list, str | None
+]:
     """
-    Получает длительность, кодек видео, разрешение, индекс/название субтитров
-    и информацию о вложенных шрифтах.
-    Возвращает: (duration, video_codec, width, height, subtitle_info, font_attachments, error_msg)
+    Получает длительность, кодек видео, формат пикселей, разрешение,
+    информацию о целевых субтитрах, список всех субтитров и вложенных шрифтов.
+
+    Возвращает кортеж:
+    - duration (float | None)
+    - video_codec (str | None)
+    - pix_fmt (str | None)
+    - width (int | None)
+    - height (int | None)
+    - default_subtitle_info (dict | None): Найденная по ключевому слову дорожка.
+    - all_subtitle_tracks (list): Список всех дорожек субтитров.
+    - font_attachments (list): Список вложенных шрифтов.
+    - error_msg (str | None)
     """
     if not FFPROBE_PATH.is_file():
-        return None, None, None, None, None, [], f"FFprobe не найден: {FFPROBE_PATH}"
+        return None, None, None, None, None, None, [], [], f"FFprobe не найден: {FFPROBE_PATH}"
 
     command = [
         str(FFPROBE_PATH),
         '-v', 'error',
-        '-show_entries', 'format=duration:stream=index,codec_name,codec_type,width,height:stream_tags=title,filename,mimetype',
+        '-show_entries',
+        'format=duration:stream=index,codec_name,codec_type,pix_fmt,width,height:stream_tags=title,language,filename,mimetype',
         '-of', 'json',
         str(filepath)
     ]
     font_mimetypes = ('application/x-truetype-font', 'application/vnd.ms-opentype',
-                      'application/font-sfnt', 'font/ttf', 'font/otf',
-                      'application/font-woff', 'application/font-woff2', 'font/woff', 'font/woff2')
+                        'application/font-sfnt', 'font/ttf', 'font/otf',
+                        'application/font-woff', 'application/font-woff2', 'font/woff', 'font/woff2')
 
     try:
         creationflags = subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
@@ -75,17 +89,29 @@ def get_video_subtitle_attachment_info(filepath: Path) -> tuple[float | None, st
         duration = float(duration_str) if duration_str and duration_str != "N/A" else None
 
         streams = data.get('streams', [])
-        video_codec = None
+        video_codec, pix_fmt = None, None
         width, height = None, None
-        subtitle_info = None
+        default_subtitle_info = None
+        all_subtitle_tracks = []
         font_attachments = []
 
-        for stream in streams: # stream_idx не используется, убран
+        for stream in streams:
             codec_type = stream.get('codec_type')
             tags = stream.get('tags', {})
+            stream_index = stream.get('index')
+
+            # Пропускаем потоки без индекса
+            if stream_index is None:
+                continue
+
+            try:
+                stream_index = int(stream_index)
+            except (ValueError, TypeError):
+                continue
 
             if video_codec is None and codec_type == 'video':
                 video_codec = stream.get('codec_name', 'unknown_video')
+                pix_fmt = stream.get('pix_fmt', 'unknown_pix_fmt')
                 width = stream.get('width')
                 height = stream.get('height')
                 if width and height:
@@ -99,45 +125,43 @@ def get_video_subtitle_attachment_info(filepath: Path) -> tuple[float | None, st
                 else:
                     width, height = None, None
 
-            elif subtitle_info is None and codec_type == 'subtitle':
-                title_from_tags = tags.get('title', '')
-                if SUBTITLE_TRACK_TITLE_KEYWORD.lower() in title_from_tags.lower():
-                    index_from_stream = stream.get('index')
-                    try:
-                        subtitle_info = {'index': int(index_from_stream), 'title': title_from_tags}
-                    except (ValueError, TypeError):
-                        pass # Игнорируем некорректный индекс
+            elif codec_type == 'subtitle':
+                title = tags.get('title', '')
+                language = tags.get('language', 'und') # 'und' for undefined
+                sub_info = {'index': stream_index, 'title': title, 'language': language}
+                all_subtitle_tracks.append(sub_info)
+
+                # Ищем "идеальную" дорожку
+                if default_subtitle_info is None and SUBTITLE_TRACK_TITLE_KEYWORD.lower() in title.lower():
+                    default_subtitle_info = sub_info
+
             elif codec_type == 'attachment':
                 mimetype = tags.get('mimetype', '').lower()
                 filename = tags.get('filename')
                 if mimetype in font_mimetypes and filename:
-                    index_from_stream = stream.get('index')
-                    try:
-                        font_attachments.append({'index': int(index_from_stream), 'filename': filename})
-                    except (ValueError, TypeError):
-                        pass # Игнорируем некорректный индекс
-        
+                    font_attachments.append({'index': stream_index, 'filename': filename})
+
         if not video_codec:
-            return duration, None, None, None, subtitle_info, font_attachments, f"Не найден видеопоток в {filepath.name}"
-        
+            return None, None, None, None, None, None, [], [], f"Не найден видеопоток в {filepath.name}"
+
         if not width or not height:
-            w_fallback, h_fallback, err_fallback = get_video_resolution(filepath) # Используем эту же функцию из модуля
+            w_fallback, h_fallback, err_fallback = get_video_resolution(filepath)
             if w_fallback and h_fallback:
                 width, height = w_fallback, h_fallback
             else:
                 err_msg_res = f"Не удалось определить разрешение для {filepath.name}."
                 if err_fallback: err_msg_res += f" ({err_fallback})"
-                return duration, video_codec.lower() if video_codec else None, None, None, subtitle_info, font_attachments, err_msg_res
+                return duration, video_codec.lower(), pix_fmt, None, None, default_subtitle_info, all_subtitle_tracks, font_attachments, err_msg_res
 
         if not duration:
-            return None, video_codec.lower() if video_codec else None, width, height, subtitle_info, font_attachments, f"Не удалось определить длительность для {filepath.name}"
+            return None, video_codec.lower(), pix_fmt, width, height, default_subtitle_info, all_subtitle_tracks, font_attachments, f"Не удалось определить длительность для {filepath.name}"
 
-        return duration, video_codec.lower() if video_codec else None, width, height, subtitle_info, font_attachments, None
+        return duration, video_codec.lower(), pix_fmt, width, height, default_subtitle_info, all_subtitle_tracks, font_attachments, None
 
     except subprocess.CalledProcessError as e:
         error_message = e.stderr.strip().split('\n')[-1] if e.stderr and e.stderr.strip() else str(e)
-        return None, None, None, None, None, [], f"ffprobe ошибка ({filepath.name}): {error_message}"
+        return None, None, None, None, None, None, [], [], f"ffprobe ошибка ({filepath.name}): {error_message}"
     except json.JSONDecodeError as e:
-        return None, None, None, None, None, [], f"Ошибка декодирования JSON от ffprobe ({filepath.name}): {e}"
+        return None, None, None, None, None, None, [], [], f"Ошибка декодирования JSON от ffprobe ({filepath.name}): {e}"
     except Exception as e:
-        return None, None, None, None, None, [], f"Общая ошибка ffprobe ({filepath.name}): {e}"
+        return None, None, None, None, None, None, [], [], f"Общая ошибка ffprobe ({filepath.name}): {e}"
