@@ -33,13 +33,14 @@ class EncoderWorker(QObject):
     overall_progress = pyqtSignal(int, int)
 
     def __init__(self, files_to_process: list, target_bitrate_mbps: int, hw_info: dict,
-                 output_directory: Path,
-                 force_resolution: bool,
-                 selected_resolution_option: tuple | None,
-                 use_lossless_mode: bool,
-                 auto_crop_enabled: bool,
-                 force_10bit_output: bool,
-                 parent_gui: QObject):
+                output_directory: Path,
+                force_resolution: bool,
+                selected_resolution_option: tuple | None,
+                use_lossless_mode: bool,
+                auto_crop_enabled: bool,
+                force_10bit_output: bool,
+                disable_subtitles: bool,
+                parent_gui: QObject):
         super().__init__()
         self.files_to_process = [Path(f) for f in files_to_process]
         self.target_bitrate_mbps = target_bitrate_mbps
@@ -49,6 +50,7 @@ class EncoderWorker(QObject):
         self.use_lossless_mode = use_lossless_mode
         self.force_10bit_output = force_10bit_output # Это теперь "принудительный" флаг
         self.auto_crop_enabled = auto_crop_enabled
+        self.disable_subtitles = disable_subtitles
         self.parent_gui = parent_gui
         self.selected_target_width = None
         self.selected_target_height = None
@@ -133,26 +135,44 @@ class EncoderWorker(QObject):
 
                 self._log(f"  Инфо: Длительность={duration:.2f}s, Кодек={input_codec}, Разрешение={source_width}x{source_height}, PixFmt={pix_fmt}", "info")
                 
-                subtitle_to_burn = default_subtitle_info
-                if default_subtitle_info:
-                    self._log(f"    Субтитры '{SUBTITLE_TRACK_TITLE_KEYWORD}': Да (индекс {default_subtitle_info['index']}, '{default_subtitle_info.get('title', 'Без названия')}')", "info")
-                else:
-                    self._log(f"    Субтитры '{SUBTITLE_TRACK_TITLE_KEYWORD}': Не найдены.", "info")
-                    if all_subtitle_tracks and self.hw_info.get('subtitles_filter'):
-                        self._log(f"    Найдены другие дорожки субтитров ({len(all_subtitle_tracks)} шт.). Запрос выбора у пользователя...", "warning")
-                        chosen_sub = QMetaObject.invokeMethod(
-                            self.parent_gui,
-                            "prompt_for_subtitle_selection",
-                            Qt.ConnectionType.BlockingQueuedConnection,
-                            Q_RETURN_ARG('QVariant'),
-                            Q_ARG(list, all_subtitle_tracks),
-                            Q_ARG(str, input_file_path.name)
-                        )
-                        if chosen_sub:
-                            subtitle_to_burn = chosen_sub
-                            self._log(f"    Пользователь выбрал дорожку: #{chosen_sub['index']} '{chosen_sub.get('title', 'Без названия')}'", "info")
-                        else:
-                            self._log("    Пользователь отказался от вшивания субтитров.", "info")
+                if not self.disable_subtitles:
+                    subtitle_to_burn = default_subtitle_info
+                    if default_subtitle_info:
+                        self._log(f"    Субтитры '{SUBTITLE_TRACK_TITLE_KEYWORD}': Да (индекс {default_subtitle_info['index']}, '{default_subtitle_info.get('title', 'Без названия')}')", "info")
+                    else:
+                        self._log(f"    Субтитры '{SUBTITLE_TRACK_TITLE_KEYWORD}': Не найдены.", "info")
+                        if all_subtitle_tracks and self.hw_info.get('subtitles_filter'):
+                            self._log(f"    Найдены другие дорожки субтитров ({len(all_subtitle_tracks)} шт.). Запрос выбора у пользователя...", "warning")
+                            chosen_sub = QMetaObject.invokeMethod(
+                                self.parent_gui,
+                                "prompt_for_subtitle_selection",
+                                Qt.ConnectionType.BlockingQueuedConnection,
+                                Q_RETURN_ARG('QVariant'),
+                                Q_ARG(list, all_subtitle_tracks),
+                                Q_ARG(str, input_file_path.name)
+                            )
+                            if chosen_sub:
+                                subtitle_to_burn = chosen_sub
+                                self._log(f"    Пользователь выбрал дорожку: #{chosen_sub['index']} '{chosen_sub.get('title', 'Без названия')}'", "info")
+                            else:
+                                self._log("    Пользователь отказался от вшивания субтитров.", "info")
+                    
+                    
+                    if font_attachments:
+                        self._log(f"    Встроенные шрифты: {len(font_attachments)} шт.", "info")
+                        fonts_extraction_target_dir = current_file_temp_dir / "extracted_fonts" 
+                        try:
+                            fonts_extraction_target_dir.mkdir(parents=True, exist_ok=True)
+                            if extract_attachments(input_file_path, font_attachments, fonts_extraction_target_dir, self._log) > 0:
+                                extracted_fonts_dir = str(fonts_extraction_target_dir)
+                                self._log(f"    Шрифты извлечены в: {extracted_fonts_dir}", "info")
+                        except Exception as e_mkdir_font:
+                            self._log(f"    Ошибка создания папки для извлеченных шрифтов: {e_mkdir_font}", "error")
+                    else:
+                        self._log(f"    Встроенные шрифты: Не найдены", "info")
+                    
+                    if subtitle_to_burn and self.hw_info.get('subtitles_filter'):
+                        subtitle_temp_file = extract_subtitle_track(input_file_path, subtitle_to_burn, current_file_temp_dir, self._log)
                 
                 if self.auto_crop_enabled:
                     detected_crop = get_crop_parameters(input_file_path, self._log, duration_for_analysis_sec=30, limit_value=24)
@@ -171,22 +191,6 @@ class EncoderWorker(QObject):
                                 self._log(f"    cropdetect не нашел значимых черных полос... Кроп не требуется.", "info")
                         except ValueError:
                             self._log(f"    Ошибка парсинга параметров cropdetect: {detected_crop}", "warning")
-                
-                if font_attachments:
-                    self._log(f"    Встроенные шрифты: {len(font_attachments)} шт.", "info")
-                    fonts_extraction_target_dir = current_file_temp_dir / "extracted_fonts" 
-                    try:
-                        fonts_extraction_target_dir.mkdir(parents=True, exist_ok=True)
-                        if extract_attachments(input_file_path, font_attachments, fonts_extraction_target_dir, self._log) > 0:
-                            extracted_fonts_dir = str(fonts_extraction_target_dir)
-                            self._log(f"    Шрифты извлечены в: {extracted_fonts_dir}", "info")
-                    except Exception as e_mkdir_font:
-                        self._log(f"    Ошибка создания папки для извлеченных шрифтов: {e_mkdir_font}", "error")
-                else:
-                    self._log(f"    Встроенные шрифты: Не найдены", "info")
-                
-                if subtitle_to_burn and self.hw_info.get('subtitles_filter'):
-                    subtitle_temp_file = extract_subtitle_track(input_file_path, subtitle_to_burn, current_file_temp_dir, self._log)
 
                 current_target_width_gui = self.selected_target_width
                 current_target_height_gui = self.selected_target_height

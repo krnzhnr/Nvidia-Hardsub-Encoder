@@ -146,6 +146,11 @@ class MainWindow(QMainWindow):
         self.chk_auto_crop.setToolTip("Анализирует видео для удаления черных полос.\nМожет немного увеличить время обработки.")
         resolution_settings_group.addWidget(self.chk_auto_crop) # Добавляем в ту же группу, что и разрешение
         
+        # --- ЧЕКБОКС ДЛЯ "НЕ ВШИВАТЬ НАДПИСИ" ---
+        self.chk_disable_subtitles = QCheckBox("Не вшивать надписи")
+        self.chk_disable_subtitles.setToolTip("Полностью отключает поиск и вшивание любых субтитров.")
+        resolution_settings_group.addWidget(self.chk_disable_subtitles)
+        
         settings_layout_container.addLayout(resolution_settings_group)
         
         # Растяжитель, чтобы прижать настройки к верху
@@ -517,6 +522,7 @@ class MainWindow(QMainWindow):
                 QMessageBox.critical(self, "Ошибка оборудования", "Информация об оборудовании NVIDIA не определена. Невозможно начать.")
                 return
 
+            disable_subtitles = self.chk_disable_subtitles.isChecked()
             use_lossless_mode = self.chk_lossless_mode.isChecked()
             force_10bit_output = self.chk_force_10bit.isChecked()
             
@@ -573,7 +579,8 @@ class MainWindow(QMainWindow):
                 use_lossless_mode=use_lossless_mode,
                 auto_crop_enabled=auto_crop_enabled,
                 force_10bit_output=force_10bit_output,
-                parent_gui=self # <-- Передаем ссылку на главное окно
+                disable_subtitles=disable_subtitles,
+                parent_gui=self
             )
             self.encoder_worker.moveToThread(self.encoder_thread)
 
@@ -604,6 +611,7 @@ class MainWindow(QMainWindow):
         self.chk_lossless_mode.setEnabled(enabled) # <--- Управляем доступностью чекбокса lossless
         self.chk_force_10bit.setEnabled(enabled)
         self.chk_auto_crop.setEnabled(enabled)
+        self.chk_disable_subtitles.setEnabled(enabled)
         # Комбобокс разрешения управляется состоянием чекбокса, но его тоже блокируем/разблокируем
         if enabled:
             # Если контролы включаются, состояние комбобокса зависит от чекбокса
