@@ -4,9 +4,9 @@ from PyQt6.QtWidgets import (
     QPushButton, QListWidget, QProgressBar, QTextEdit,
     QLabel, QFileDialog, QLineEdit, QMessageBox, QSpinBox,
     QScrollArea, QSizePolicy, QSpacerItem, QComboBox, QCheckBox,
-    QInputDialog # <-- НОВЫЙ ИМПОРТ
+    QInputDialog, QGroupBox # <-- ИМПОРТИРУЕМ QGroupBox
 )
-from PyQt6.QtCore import Qt, QThread, QCoreApplication, QUrl, pyqtSlot, QMetaObject # <-- НОВЫЕ ИМПОРТЫ
+from PyQt6.QtCore import Qt, QThread, QCoreApplication, QUrl, pyqtSlot, QMetaObject
 from PyQt6.QtGui import QPalette, QColor, QTextCursor, QDesktopServices
 from pathlib import Path
 import os
@@ -41,7 +41,6 @@ class MainWindow(QMainWindow):
         self.init_ui()
         self.check_system_components()
 
-    # ... (init_ui и другие методы до toggle_bitrate_settings_availability без изменений) ...
     def init_ui(self):
         main_widget = QWidget()
         self.setCentralWidget(main_widget)
@@ -62,55 +61,42 @@ class MainWindow(QMainWindow):
         
         top_panel_layout.addLayout(file_selection_layout, 2) # 2/3 ширины
 
-        # Правая часть верхней панели: настройки
-        settings_layout_container = QVBoxLayout() # Контейнер для всех настроек справа
-        
-        # -- Группа настроек вывода --
-        output_settings_group = QVBoxLayout()
-        
-        lbl_output_dir = QLabel("Папка для вывода:")
-        output_settings_group.addWidget(lbl_output_dir)
-        
+        # Правая часть верхней панели: настройки в группах
+        settings_layout_container = QVBoxLayout()
+
+        # -- Группа 1: Параметры вывода --
+        group_box_output = QGroupBox("Параметры вывода")
+        layout_output = QVBoxLayout(group_box_output)
+
         output_dir_layout = QHBoxLayout()
         self.line_edit_output_dir = QLineEdit(str(self.output_directory))
-        self.line_edit_output_dir.setReadOnly(True) # Чтобы пользователь не мог редактировать напрямую
+        self.line_edit_output_dir.setReadOnly(True)
         output_dir_layout.addWidget(self.line_edit_output_dir)
+
         self.btn_select_output_dir = QPushButton("Обзор...")
         self.btn_select_output_dir.clicked.connect(self.select_output_directory)
         output_dir_layout.addWidget(self.btn_select_output_dir)
-        output_settings_group.addLayout(output_dir_layout)
-        
-        # --- НОВАЯ КНОПКА ДЛЯ ОТКРЫТИЯ ПАПКИ ---
+
         self.btn_open_output_dir = QPushButton("Открыть")
         self.btn_open_output_dir.setToolTip("Открыть выбранную папку вывода в проводнике")
         self.btn_open_output_dir.clicked.connect(self.open_output_directory_in_explorer)
         output_dir_layout.addWidget(self.btn_open_output_dir)
-        # -----------------------------------------
-
-        settings_layout_container.addLayout(output_settings_group)
-        settings_layout_container.addSpacerItem(QSpacerItem(1, 10, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)) # Отступ
-
-        # -- Группа настроек битрейта / качества --
-        bitrate_quality_group = QVBoxLayout() # Переименуем для ясности
         
-        # --- НОВЫЙ ЧЕКБОКС ДЛЯ 10-БИТ ---
-        self.chk_force_10bit = QCheckBox("Принудительный 10-бит (HEVC Main10)")
-        self.chk_force_10bit.setToolTip("Принудительно кодировать в 10-битном цвете.\nМожет немного увеличить размер файла и время, но улучшает качество градиентов.")
-        # Этот чекбокс может быть независимым или его доступность может зависеть от других опций.
-        # Пока сделаем его независимым.
-        bitrate_quality_group.addWidget(self.chk_force_10bit)
-        # -----------------------------------
+        layout_output.addLayout(output_dir_layout)
+        settings_layout_container.addWidget(group_box_output)
+
+        # -- Группа 2: Качество видео --
+        group_box_quality = QGroupBox("Качество видео")
+        layout_quality = QVBoxLayout(group_box_quality)
 
         self.chk_lossless_mode = QCheckBox("Lossless")
         self.chk_lossless_mode.stateChanged.connect(self.toggle_bitrate_settings_availability)
-        bitrate_quality_group.addWidget(self.chk_lossless_mode)
+        layout_quality.addWidget(self.chk_lossless_mode)
 
-        # Контейнер для элементов управления битрейтом, чтобы их можно было легко показать/скрыть
-        # или сделать неактивными целиком
         self.bitrate_controls_widget = QWidget()
         bitrate_controls_layout = QVBoxLayout(self.bitrate_controls_widget)
-        bitrate_controls_layout.setContentsMargins(0,0,0,0) # Убрать отступы у вложенного лейаута
-
+        bitrate_controls_layout.setContentsMargins(0, 0, 0, 0)
+        
         lbl_bitrate = QLabel("Целевой средний битрейт (Мбит/с):")
         bitrate_controls_layout.addWidget(lbl_bitrate)
         
@@ -125,33 +111,41 @@ class MainWindow(QMainWindow):
         self.update_derived_bitrates_display()
         bitrate_controls_layout.addWidget(self.lbl_derived_bitrates)
         
-        bitrate_quality_group.addWidget(self.bitrate_controls_widget) # Добавляем виджет с контролами битрейта
-        
-        settings_layout_container.addLayout(bitrate_quality_group)
-        settings_layout_container.addSpacerItem(QSpacerItem(1, 10, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed))
+        layout_quality.addWidget(self.bitrate_controls_widget)
 
-        # -- Группа настроек разрешения --
-        resolution_settings_group = QVBoxLayout()
-        self.chk_force_resolution = QCheckBox("Принудительное разрешение вывода")
-        self.chk_force_resolution.stateChanged.connect(self.toggle_resolution_options) # Переименовал для ясности
-        resolution_settings_group.addWidget(self.chk_force_resolution)
+        self.chk_force_10bit = QCheckBox("Принудительный 10-бит (HEVC Main10)")
+        self.chk_force_10bit.setToolTip("Принудительно кодировать в 10-битном цвете.\nМожет немного увеличить размер файла и время, но улучшает качество градиентов.")
+        layout_quality.addWidget(self.chk_force_10bit)
 
-        self.combo_resolution = QComboBox()
-        # self.combo_resolution.addItems(["720p (1280x720)", "1080p (1920x1080)"]) # Удаляем статические элементы
-        self.combo_resolution.setEnabled(False)
-        resolution_settings_group.addWidget(self.combo_resolution)
-        
-        # --- ЧЕКБОКС ДЛЯ АВТО-КРОПА ---
+        settings_layout_container.addWidget(group_box_quality)
+
+        # -- Группа 3: Разрешение и кадрирование --
+        group_box_geometry = QGroupBox("Разрешение и кадрирование")
+        layout_geometry = QVBoxLayout(group_box_geometry)
+
         self.chk_auto_crop = QCheckBox("Автоматически обрезать черные полосы")
         self.chk_auto_crop.setToolTip("Анализирует видео для удаления черных полос.\nМожет немного увеличить время обработки.")
-        resolution_settings_group.addWidget(self.chk_auto_crop) # Добавляем в ту же группу, что и разрешение
+        layout_geometry.addWidget(self.chk_auto_crop)
+
+        self.chk_force_resolution = QCheckBox("Принудительное разрешение вывода")
+        self.chk_force_resolution.stateChanged.connect(self.toggle_resolution_options)
+        layout_geometry.addWidget(self.chk_force_resolution)
+
+        self.combo_resolution = QComboBox()
+        self.combo_resolution.setEnabled(False)
+        layout_geometry.addWidget(self.combo_resolution)
         
-        # --- ЧЕКБОКС ДЛЯ "НЕ ВШИВАТЬ НАДПИСИ" ---
+        settings_layout_container.addWidget(group_box_geometry)
+
+        # -- Группа 4: Обработка субтитров --
+        group_box_subtitles = QGroupBox("Обработка субтитров")
+        layout_subtitles = QVBoxLayout(group_box_subtitles)
+        
         self.chk_disable_subtitles = QCheckBox("Не вшивать надписи")
         self.chk_disable_subtitles.setToolTip("Полностью отключает поиск и вшивание любых субтитров.")
-        resolution_settings_group.addWidget(self.chk_disable_subtitles)
+        layout_subtitles.addWidget(self.chk_disable_subtitles)
         
-        settings_layout_container.addLayout(resolution_settings_group)
+        settings_layout_container.addWidget(group_box_subtitles)
         
         # Растяжитель, чтобы прижать настройки к верху
         settings_layout_container.addSpacerItem(QSpacerItem(20, 40, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding))
@@ -160,7 +154,7 @@ class MainWindow(QMainWindow):
         layout.addLayout(top_panel_layout, 2)
 
         # --- Средняя панель: Прогресс и кнопка Старт/Стоп ---
-        middle_panel_layout = QVBoxLayout() # Новый контейнер
+        middle_panel_layout = QVBoxLayout()
 
         progress_layout = QVBoxLayout()
         self.lbl_current_file_progress = QLabel("Текущий файл: -")
@@ -173,36 +167,32 @@ class MainWindow(QMainWindow):
         self.progress_bar_overall = QProgressBar()
         progress_layout.addWidget(self.progress_bar_overall)
         
-        middle_panel_layout.addLayout(progress_layout) # Добавляем прогресс бары
+        middle_panel_layout.addLayout(progress_layout)
 
-        # Кнопка Старт/Стоп теперь здесь
         self.btn_start_stop = QPushButton("Начать кодирование")
         self.btn_start_stop.setFixedHeight(40)
         self.btn_start_stop.clicked.connect(self.toggle_encoding)
-        middle_panel_layout.addWidget(self.btn_start_stop, 0, Qt.AlignmentFlag.AlignCenter) # Центрируем кнопку
+        middle_panel_layout.addWidget(self.btn_start_stop, 0, Qt.AlignmentFlag.AlignCenter)
         middle_panel_layout.addSpacerItem(QSpacerItem(1, 10, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed))
 
-
-        layout.addLayout(middle_panel_layout) # Добавляем всю среднюю панель
-
+        layout.addLayout(middle_panel_layout)
 
         # --- Нижняя панель: Логи ---
         self.log_edit = QTextEdit()
         self.log_edit.setReadOnly(True)
-        # Установка темной темы для логов для лучшей читаемости
         palette = self.log_edit.palette()
         palette.setColor(QPalette.ColorRole.Base, QColor(40, 40, 40))
         palette.setColor(QPalette.ColorRole.Text, QColor(220, 220, 220))
         self.log_edit.setPalette(palette)
         
-        # layout.addWidget(self.log_edit, 1) # 1/3 высоты для логов
-        # Сделаем логи в QScrollArea, чтобы они не занимали слишком много места сразу
         scroll_area_logs = QScrollArea()
         scroll_area_logs.setWidgetResizable(True)
         scroll_area_logs.setWidget(self.log_edit)
-        scroll_area_logs.setMinimumHeight(150) # Минимальная высота для логов
+        scroll_area_logs.setMinimumHeight(150)
         layout.addWidget(scroll_area_logs, 1)
-        
+
+    # ... (остальная часть класса MainWindow без изменений) ...
+
     def select_output_directory(self):
         directory = QFileDialog.getExistingDirectory(
             self,
@@ -394,7 +384,7 @@ class MainWindow(QMainWindow):
 
             multipliers = {
                 "x2.0 (Увеличение)": 2.0,
-                "x1.5 (Увеличение)": 1.5,
+                "x1.33 (Увеличение)": (1/1.5)*2,
                 "Исходное разрешение": 1.0,
                 "x0.66 (Уменьшение ~1/1.5)": 1/1.5, # ~720p от 1080p
                 "x0.5 (Уменьшение)": 0.5,           # ~1080p от 2160p (4K)
