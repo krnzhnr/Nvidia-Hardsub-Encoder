@@ -4,7 +4,7 @@ from PyQt6.QtWidgets import (
     QPushButton, QListWidget, QProgressBar, QTextEdit,
     QLabel, QFileDialog, QLineEdit, QMessageBox, QSpinBox,
     QScrollArea, QSizePolicy, QSpacerItem, QComboBox, QCheckBox,
-    QInputDialog, QGroupBox # <-- ИМПОРТИРУЕМ QGroupBox
+    QInputDialog, QGroupBox
 )
 from PyQt6.QtCore import Qt, QThread, QCoreApplication, QUrl, pyqtSlot, QMetaObject
 from PyQt6.QtGui import QPalette, QColor, QTextCursor, QDesktopServices
