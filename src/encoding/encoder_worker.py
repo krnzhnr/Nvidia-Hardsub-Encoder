@@ -343,16 +343,58 @@ class EncoderWorker(QObject):
             self._log("\n--- Обработка прервана. ---", "warning")
         self.finished.emit()
 
-    def analyze_ffmpeg_stderr(self, stderr_text):
-        if not stderr_text: return "Неизвестная ошибка (пустой stderr)"
+    def analyze_ffmpeg_stderr(self, stderr_text: str) -> str:
+        """
+        Более интеллектуально анализирует stderr FFmpeg для поиска реальной причины ошибки.
+        """
+        if not stderr_text:
+            return "Неизвестная ошибка (пустой stderr)"
+
+        # 1. Сначала ищем явные, известные критические ошибки по всему тексту
         if "Driver does not support the required nvenc API version" in stderr_text:
-            return "Несовместимая версия драйвера NVIDIA."
+            return "Несовместимая версия драйвера NVIDIA. Обновите драйверы."
+        if "No space left on device" in stderr_text:
+            return "Закончилось место на диске."
         if "[libass]" in stderr_text or "fontconfig" in stderr_text.lower():
-            if "Font not found" in stderr_text: return f"Ошибка субтитров: Шрифт не найден."
+            if "Font not found" in stderr_text: return "Ошибка субтитров: Шрифт не найден."
             return "Ошибка при обработке субтитров (libass/fontconfig)."
-        if "No such file or directory" in stderr_text: return "Файл или папка не найдены."
-        if "Permission denied" in stderr_text: return "Отказано в доступе."
-        lines = [line for line in stderr_text.strip().split('\n') if line.strip()]
-        last_meaningful_lines = lines[-5:]
-        if last_meaningful_lines: return "Последние сообщения FFmpeg: " + " | ".join(last_meaningful_lines)
-        return "Неизвестная ошибка FFmpeg."
+        if "No such file or directory" in stderr_text:
+            return "Файл или папка не найдены (No such file or directory)."
+        if "Permission denied" in stderr_text:
+            return "Отказано в доступе (Permission denied)."
+
+        # 2. Если явных совпадений нет, ищем последнюю "значимую" информацию
+        lines = [line.strip() for line in stderr_text.strip().split('\n') if line.strip()]
+        
+        # Ключевые слова, которые с высокой вероятностью указывают на ошибку
+        error_keywords = ['error', 'failed', 'invalid', 'could not', 'unable', 'cannot', 'unrecognized']
+
+        # 3. Ищем последнюю строку, содержащую ключевое слово ошибки
+        last_error_line_index = -1
+        for i in range(len(lines) - 1, -1, -1):
+            line_lower = lines[i].lower()
+            if any(keyword in line_lower for keyword in error_keywords):
+                last_error_line_index = i
+                break
+        
+        # Если нашли строку с ключевым словом, покажем ее и немного контекста до нее
+        if last_error_line_index != -1:
+            start_index = max(0, last_error_line_index - 2) # Берем до 2 строк контекста до ошибки
+            context_lines = lines[start_index : last_error_line_index + 1]
+            return "Обнаружена ошибка: " + " | ".join(context_lines)
+
+        # 4. Если ключевых слов не найдено, соберем последние 3-4 НЕ-прогресс строки
+        meaningful_lines = []
+        for line in reversed(lines):
+            # Строки прогресса почти всегда содержат "frame=" и "speed=". Игнорируем их.
+            if 'frame=' not in line and 'fps=' not in line and 'speed=' not in line:
+                meaningful_lines.append(line)
+                if len(meaningful_lines) >= 4: # Собираем до 4-х строк
+                    break
+        
+        if meaningful_lines:
+            meaningful_lines.reverse() # Восстанавливаем оригинальный порядок
+            return "Последние сообщения FFmpeg: " + " | ".join(meaningful_lines)
+
+        # 5. В крайнем случае, если остались только строки прогресса, показываем старую логику
+        return "Не удалось найти причину (показаны последние строки): " + " | ".join(lines[-3:])
