@@ -47,6 +47,9 @@ FONTS_SUBDIR = "fonts" # Относительно APP_DIR
 FFMPEG_EXE_NAME = "ffmpeg.exe"
 FFPROBE_EXE_NAME = "ffprobe.exe"
 
-# Пути к ffmpeg и ffprobe (теперь они строятся от APP_DIR, который указывает на корень проекта)
-FFMPEG_PATH = APP_DIR / FFMPEG_EXE_NAME
-FFPROBE_PATH = APP_DIR / FFPROBE_EXE_NAME
+# Ищем ffmpeg и ffprobe сначала в системе
+from src.ffmpeg.core import find_executable_in_path
+
+# Пытаемся найти исполняемые файлы в системе
+FFMPEG_PATH = find_executable_in_path('ffmpeg') or (APP_DIR / FFMPEG_EXE_NAME)
+FFPROBE_PATH = find_executable_in_path('ffprobe') or (APP_DIR / FFPROBE_EXE_NAME)
