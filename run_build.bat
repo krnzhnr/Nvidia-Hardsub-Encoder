@@ -7,6 +7,3 @@ call venv\Scripts\activate.bat
 
 echo [*] Запуск build.py...
 python build.py
-
-echo [✓] Готово!
-pause

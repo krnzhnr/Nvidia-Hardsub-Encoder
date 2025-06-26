@@ -3,6 +3,7 @@ import os
 import sys
 import shutil
 import pyperclip  # для копирования в буфер обмена
+import time  # добавляем импорт time
 
 # === Настройки ===
 VENV_DIR = "venv"
@@ -46,13 +47,17 @@ def install_deps():
 
 # === Очистка сборочных папок ===
 def clean():
-    for folder in ["build", "dist", f"{EXE_BASE_NAME}.spec"]:
+    # Удаляем папки сборки
+    for folder in ["build", "dist"]:
         if os.path.exists(folder):
             print(f"[*] Удаляю {folder}...")
-            if os.path.isdir(folder):
-                shutil.rmtree(folder)
-            else:
-                os.remove(folder)
+            shutil.rmtree(folder)
+    
+    # Удаляем все .spec файлы
+    for file in os.listdir():
+        if file.endswith(".spec"):
+            print(f"[*] Удаляю {file}...")
+            os.remove(file)
 
 def create_version_file(build_num_formatted):
     # Преобразуем строку с ведущими нулями в целое число для filevers
@@ -144,3 +149,5 @@ if __name__ == "__main__":
     install_deps()
     clean()
     build()
+    print("\n[*] Окно закроется через 10 секунд...")
+    time.sleep(10)
