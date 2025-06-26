@@ -6,6 +6,7 @@ import platform
 import tempfile
 import shutil
 import re
+import time # Добавляем импорт time
 
 # Обновленные импорты
 from src.app_config import (
@@ -30,7 +31,7 @@ class EncoderWorker(QObject):
     log_message = pyqtSignal(str, str)
     file_processed = pyqtSignal(str, bool, str)
     finished = pyqtSignal()
-    overall_progress = pyqtSignal(int, int)
+    overall_progress = pyqtSignal(int, int, str)  # Добавляем строку времени в сигнал
 
     def __init__(self, files_to_process: list, target_bitrate_mbps: int, hw_info: dict,
                 output_directory: Path,
@@ -48,7 +49,7 @@ class EncoderWorker(QObject):
         self.output_directory = output_directory
         self.force_resolution = force_resolution
         self.use_lossless_mode = use_lossless_mode
-        self.force_10bit_output = force_10bit_output # Это теперь "принудительный" флаг
+        self.force_10bit_output = force_10bit_output
         self.auto_crop_enabled = auto_crop_enabled
         self.disable_subtitles = disable_subtitles
         self.parent_gui = parent_gui
@@ -59,6 +60,14 @@ class EncoderWorker(QObject):
 
         self._is_running = True
         self._process = None
+        
+        # Добавляем атрибуты для отслеживания времени
+        self.total_start_time = None
+        self.current_file_start_time = None
+        self.processed_files_duration = 0  # Общая длительность уже обработанных файлов
+        self.total_duration = 0  # Общая длительность всех файлов
+        self.processed_files_time = 0  # Сколько времени ушло на обработку предыдущих файлов
+        self.last_file_speed = 1.0  # Последняя известная скорость обработки
 
     def _log(self, message, level="info"):
         self.log_message.emit(message, level)
@@ -81,8 +90,52 @@ class EncoderWorker(QObject):
             except Exception as e:
                 self._log(f"  Ошибка при попытке остановить FFmpeg: {e}", "error")
 
+    def format_time(self, seconds: float) -> str:
+        """Форматирует время в секундах в строку ЧЧ:ММ:СС"""
+        if seconds is None or seconds < 0:
+            return "??:??:??"
+        hours = int(seconds // 3600)
+        minutes = int((seconds % 3600) // 60)
+        secs = int(seconds % 60)
+        return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+    def calculate_queue_eta(self, current_file_progress: float, current_speed: float) -> str:
+        """Рассчитывает оставшееся время для всей очереди и общее прошедшее время"""
+        if not self.total_start_time:
+            return None
+
+        # Рассчитываем общее прошедшее время
+        total_elapsed = time.time() - self.total_start_time
+        elapsed_str = self.format_time(total_elapsed)
+        
+        # Рассчитываем ETA для очереди
+        if current_speed <= 0:
+            eta_str = "??:??:??"
+        else:
+            self.last_file_speed = current_speed
+            remaining_duration = self.total_duration - self.processed_files_duration
+            if current_file_progress is not None:
+                remaining_duration -= (current_file_progress / 100.0) * (self.total_duration - self.processed_files_duration)
+            eta_str = self.format_time(remaining_duration / self.last_file_speed)
+        
+        # Возвращаем обе части времени для отображения
+        return f"Прошло всего: {elapsed_str} | Осталось для очереди: {eta_str}"
+
     def run(self):
+        self.total_start_time = time.time()
         output_base_dir = self.output_directory
+        
+        # Сначала получим общую длительность всех файлов
+        total_duration = 0
+        for file_path in self.files_to_process:
+            try:
+                duration, _, _, _, _, _, _, _, info_error = get_video_subtitle_attachment_info(file_path)
+                if duration:
+                    total_duration += duration
+            except Exception:
+                continue
+        self.total_duration = total_duration
+        
         try:
             output_base_dir.mkdir(parents=True, exist_ok=True)
         except OSError as e:
@@ -96,7 +149,8 @@ class EncoderWorker(QObject):
                 self._log(f"Кодирование прервано пользователем перед обработкой {input_file_path.name}.", "warning")
                 break
 
-            self.overall_progress.emit(i + 1, total_files)
+            self.current_file_start_time = time.time()
+            self.overall_progress.emit(i + 1, total_files, "")  # Начальная пустая строка времени
             self.progress.emit(0, input_file_path.name)
             self._log(f"\n--- [{i+1}/{total_files}] Начало обработки: {input_file_path.name} ---", "info")
 
@@ -294,11 +348,38 @@ class EncoderWorker(QObject):
                         if self._process.poll() is not None: break
                         else: QThread.msleep(50); continue
                     full_stderr += line
-                    _, percent, speed, fps, bitrate_str = parse_ffmpeg_output_for_progress(line, duration)
+                    current_time, percent, speed, fps, bitrate_str, eta, elapsed = parse_ffmpeg_output_for_progress(line, duration)
                     if percent is not None:
-                        status_msg = f"{input_file_path.name} ({percent}%) | Скорость: {speed}, FPS: {fps}, Битрейт: {bitrate_str}"
+                        # Рассчитываем оставшееся время для всей очереди
+                        try:
+                            current_speed = float(speed.rstrip('x')) if speed != "N/A" else 0
+                            queue_eta = self.calculate_queue_eta(percent, current_speed)
+                            if queue_eta:
+                                queue_time_str = f"{queue_eta}"
+                                self.overall_progress.emit(i + 1, total_files, queue_time_str)
+                        except ValueError:
+                            pass
+
+                        # Форматируем статусное сообщение с информацией о времени текущего файла
+                        time_info = []
+                        if elapsed: time_info.append(f"Прошло: {elapsed}")
+                        if eta: time_info.append(f"Осталось: {eta}")
+                        time_str = " | ".join(time_info) if time_info else ""
+                        
+                        status_parts = []
+                        status_parts.append(f"{input_file_path.name} ({percent}%)")
+                        if time_str: status_parts.append(time_str)
+                        status_parts.extend([f"Скорость: {speed}", f"FPS: {fps}", f"Битрейт: {bitrate_str}"])
+                        
+                        status_msg = " | ".join(status_parts)
                         self.progress.emit(percent, status_msg)
-                self._process.wait()
+
+                # После обработки файла обновляем счетчики
+                if self._process.poll() == 0:  # Если файл успешно обработан
+                    if duration:
+                        self.processed_files_duration += duration
+                    self.processed_files_time += time.time() - self.current_file_start_time
+
                 return_code = self._process.poll()
                 self._process = None
                 if not self._is_running and return_code != 0:

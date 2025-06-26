@@ -637,10 +637,12 @@ class MainWindow(QMainWindow):
             self.lbl_overall_progress.setText("Общий прогресс: -/-")
     
     
-    def update_overall_progress_label(self, current_num_processing, total_num):
-        """Обновляет только текстовую метку общего прогресса."""
-        self.lbl_overall_progress.setText(f"Обработка файла: {current_num_processing}/{total_num}")
-        # QProgressBar здесь НЕ обновляется
+    def update_overall_progress_label(self, current_num_processing, total_num, queue_time_str=""):
+        """Обновляет текстовую метку общего прогресса."""
+        if queue_time_str:
+            self.lbl_overall_progress.setText(f"Обработка файла: {current_num_processing}/{total_num} | {queue_time_str}")
+        else:
+            self.lbl_overall_progress.setText(f"Обработка файла: {current_num_processing}/{total_num}")
 
 
     def on_file_processed(self, filename, success, message):

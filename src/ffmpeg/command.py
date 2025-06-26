@@ -53,35 +53,7 @@ def build_ffmpeg_command(
 
     vf_items = []
 
-    # 1. CROP
-    if crop_parameters:
-        try:
-            cw_crop, ch_crop, _, _ = map(int, crop_parameters.split(':'))
-            if cw_crop > 0 and ch_crop > 0:
-                if frames_on_gpu:
-                    # Если кадры на GPU, и crop - CPU фильтр, нужно скачать
-                    vf_items.append(f"hwdownload,format={cpu_processing_pix_fmt}")
-                    frames_on_gpu = False
-                vf_items.append(f"crop={crop_parameters}")
-        except ValueError:
-            # Логирование ошибки парсинга кропа должно быть в EncoderWorker
-            pass 
-
-    # 2. SCALE (как в вашем исходном коде, но с явными w= h=)
-    if target_width and target_height:
-        tw_scale, th_scale = target_width, target_height
-        if tw_scale > 0 and th_scale > 0:
-            # ВАШ ИСХОДНЫЙ КОД ИСПОЛЬЗОВАЛ ПРОСТО 'scale'.
-            # Если scale_npp не работал, вернемся к обычному scale,
-            # FFmpeg должен сам разобраться с hwupload/hwdownload если нужно.
-            scale_filter_str = f"scale=w={tw_scale}:h={th_scale}:flags=lanczos"
-            # Если вы уверены, что scale_npp работал и давал лучший результат, и проблема была не в нем:
-            # scale_filter_str = f"scale_npp=w={tw_scale}:h={th_scale}:interp_algo=lanczos:format={output_pixel_format_for_vf}"
-            # Но ошибка "No option name near '...interp_algo=lanczos:format=p010le'" намекает, что синтаксис scale_npp был проблемой.
-            # Давайте пока вернемся к простому 'scale'.
-            vf_items.append(scale_filter_str)
-
-    # 3. SUBTITLES (вшивание)
+    # 1. SUBTITLES (вшивание) - перемещаем субтитры в начало цепочки фильтров
     burn_subtitles = subtitle_temp_file_path and hw_info.get('subtitles_filter', False)
     if burn_subtitles:
         if frames_on_gpu:
@@ -114,9 +86,29 @@ def build_ffmpeg_command(
         vf_items.append(subtitle_filter_string)
         # frames_on_gpu остается False
 
+    # 2. CROP - теперь кроп применяется после субтитров
+    if crop_parameters:
+        try:
+            cw_crop, ch_crop, _, _ = map(int, crop_parameters.split(':'))
+            if cw_crop > 0 and ch_crop > 0:
+                if frames_on_gpu:
+                    # Если кадры на GPU, и crop - CPU фильтр, нужно скачать
+                    vf_items.append(f"hwdownload,format={cpu_processing_pix_fmt}")
+                    frames_on_gpu = False
+                vf_items.append(f"crop={crop_parameters}")
+        except ValueError:
+            # Логирование ошибки парсинга кропа должно быть в EncoderWorker
+            pass 
 
-# 4. ФИНАЛЬНЫЙ FORMAT (как в вашем исходном коде)
-    vf_items.append(f"format={gpu_target_pix_fmt}") 
+    # 3. SCALE
+    if target_width and target_height:
+        tw_scale, th_scale = target_width, target_height
+        if tw_scale > 0 and th_scale > 0:
+            scale_filter_str = f"scale=w={tw_scale}:h={th_scale}:flags=lanczos"
+            vf_items.append(scale_filter_str)
+
+    # 4. ФИНАЛЬНЫЙ FORMAT
+    vf_items.append(f"format={gpu_target_pix_fmt}")
 
     if vf_items:
         command.extend(['-vf', ",".join(vf_items)])
