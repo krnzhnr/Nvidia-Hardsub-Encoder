@@ -37,6 +37,7 @@ class MainWindow(QMainWindow):
         self.output_directory = APP_DIR / OUTPUT_SUBDIR
         self.current_source_width = None
         self.current_source_height = None
+        self.current_message_box = None  # Добавляем атрибут для хранения текущего диалога
 
         self.init_ui()
         self.check_system_components()
@@ -502,14 +503,21 @@ class MainWindow(QMainWindow):
             if self.encoder_worker:
                 self.encoder_worker.stop()
             self.btn_start_stop.setText("Остановка...")
-            self.btn_start_stop.setEnabled(False) # Блокируем на время остановки
+            self.btn_start_stop.setEnabled(False)
         else:
             # Начинаем кодирование
             if not self.files_to_process:
-                QMessageBox.warning(self, "Нет файлов", "Пожалуйста, выберите файлы для кодирования.")
+                msg = QMessageBox(QMessageBox.Icon.Warning, "Нет файлов",
+                                "Пожалуйста, выберите файлы для кодирования.", 
+                                QMessageBox.StandardButton.Ok, self)
+                msg.show()
                 return
+                
             if not self.hw_info:
-                QMessageBox.critical(self, "Ошибка оборудования", "Информация об оборудовании NVIDIA не определена. Невозможно начать.")
+                msg = QMessageBox(QMessageBox.Icon.Critical, "Ошибка оборудования",
+                                "Информация об оборудовании NVIDIA не определена. Невозможно начать.", 
+                                QMessageBox.StandardButton.Ok, self)
+                msg.show()
                 return
 
             disable_subtitles = self.chk_disable_subtitles.isChecked()
@@ -666,32 +674,44 @@ class MainWindow(QMainWindow):
         self.encoder_thread = None 
         self.encoder_worker = None 
         
-        # Убедимся, что прогресс-бар показывает 100%, если все файлы обработаны
-        # (даже если последний файл вызвал ошибку, он все равно "обработан")
-        # Но это уже должно быть сделано в on_file_processed
-        self.update_overall_progress_display() # Просто для финального обновления метки
+        self.update_overall_progress_display()
         
-        QMessageBox.information(self, "Завершено", "Обработка всех файлов завершена.")
-
+        msg = QMessageBox(QMessageBox.Icon.Information, "Завершено",
+                         "Обработка всех файлов завершена.",
+                         QMessageBox.StandardButton.Ok, self)
+        msg.show()
 
     def closeEvent(self, event):
         if self.encoder_thread and self.encoder_thread.isRunning():
-            reply = QMessageBox.question(self, "Кодирование в процессе",
-                                            "Идет процесс кодирования. Вы уверены, что хотите выйти? "
-                                            "Текущий файл не будет сохранен.",
-                                            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                                            QMessageBox.StandardButton.No)
-            if reply == QMessageBox.StandardButton.Yes:
+            msg = QMessageBox(QMessageBox.Icon.Question, "Кодирование в процессе",
+                            "Идет процесс кодирования. Вы уверены, что хотите выйти? "
+                            "Текущий файл не будет сохранен.",
+                            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                            self)
+            msg.setDefaultButton(QMessageBox.StandardButton.No)
+            
+            if msg.exec() == QMessageBox.StandardButton.Yes:
                 if self.encoder_worker:
                     self.encoder_worker.stop()
-                if self.encoder_thread: # Доп. проверка
-                    self.encoder_thread.quit() # Просим поток завершиться
-                    if not self.encoder_thread.wait(3000): # Ждем не более 3 сек
+                if self.encoder_thread:
+                    self.encoder_thread.quit()
+                    if not self.encoder_thread.wait(3000):
                         self.log_message("Поток не завершился штатно, принудительная остановка.", "warning")
-                        self.encoder_thread.terminate() # Если не завершился, терминируем
-                        self.encoder_thread.wait() # Ждем завершения после terminate
+                        self.encoder_thread.terminate()
+                        self.encoder_thread.wait()
                 event.accept()
             else:
                 event.ignore()
         else:
             event.accept()
+
+    def show_message_box(self, method, title, text, buttons=None, defaultButton=None):
+        """
+        Показывает диалоговое окно с заданными параметрами.
+        method: QMessageBox.information, warning, question, или critical
+        """
+        if buttons is None:
+            reply = method(self, title, text)
+        else:
+            reply = method(self, title, text, buttons, defaultButton)
+        return reply

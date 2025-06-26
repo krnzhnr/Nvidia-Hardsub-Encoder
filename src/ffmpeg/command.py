@@ -69,18 +69,20 @@ def build_ffmpeg_command(
         subtitle_filter_string = f"subtitles=filename='{subtitle_path_escaped}'"
         
         fontsdir_to_use_str = None
-        if temp_fonts_dir_path and Path(temp_fonts_dir_path).is_dir() and list(Path(temp_fonts_dir_path).glob('*')):
-            fontsdir_path_obj = Path(temp_fonts_dir_path)
-        else:
-            static_fonts_dir = (APP_DIR / FONTS_SUBDIR).resolve()
-            if static_fonts_dir.is_dir() and list(static_fonts_dir.glob('*')):
-                fontsdir_path_obj = static_fonts_dir
-            else:
-                fontsdir_path_obj = None
+        # Сначала проверяем временную директорию шрифтов
+        if temp_fonts_dir_path:
+            fonts_dir = Path(temp_fonts_dir_path)
+            if fonts_dir.is_dir():
+                fontsdir_to_use_str = fonts_dir.as_posix()
         
-        if fontsdir_path_obj:
-            fontsdir_posix = fontsdir_path_obj.as_posix()
-            fontsdir_to_use_str = fontsdir_posix.replace(":", "\\:") if platform.system() == "Windows" else fontsdir_posix
+        # Если временной директории нет, проверяем статическую
+        if not fontsdir_to_use_str:
+            static_fonts_dir = (APP_DIR / FONTS_SUBDIR).resolve()
+            if static_fonts_dir.is_dir():
+                fontsdir_to_use_str = static_fonts_dir.as_posix()
+        
+        if fontsdir_to_use_str:
+            fontsdir_to_use_str = fontsdir_to_use_str.replace(":", "\\:") if platform.system() == "Windows" else fontsdir_to_use_str
             subtitle_filter_string += f":fontsdir='{fontsdir_to_use_str}'"
             
         vf_items.append(subtitle_filter_string)
@@ -143,7 +145,7 @@ def build_ffmpeg_command(
     encoder_opts.extend(['-multipass', '0']) # В вашем коде это было
 
     command.extend(encoder_opts)
-    encoder_display_name = f"nvidia ({hw_info['encoder']})"
+    encoder_display_name = hw_info['encoder']  # Используем прямое значение из hw_info
 
     # Параметры аудио кодека
     command.extend([

@@ -11,62 +11,87 @@ def get_crop_parameters(filepath: Path, log_callback, duration_for_analysis_sec:
     Анализирует видео с помощью cropdetect и возвращает строку параметров для фильтра crop.
     duration_for_analysis_sec: сколько секунд видео анализировать.
     limit_value: порог для cropdetect (0-255).
-    Возвращает строку типа "w:h:x:y" или None, если не удалось.
+    Возвращает строку типа "w:h:x:y" или None, если не удалось или обрезка не требуется.
     """
     if not FFMPEG_PATH.is_file():
         log_callback(f"FFmpeg не найден для cropdetect: {FFMPEG_PATH}", "error")
         return None
 
+    # Сначала получаем исходные размеры видео
+    orig_width = orig_height = None
+    try:
+        probe_cmd = [
+            str(FFMPEG_PATH),
+            '-hide_banner',
+            '-i', str(filepath),
+        ]
+        probe_process = subprocess.Popen(probe_cmd, stderr=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                                      text=True, encoding='utf-8', errors='ignore',
+                                      creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0)
+        _, probe_stderr = probe_process.communicate()
+        
+        # Исправленное регулярное выражение для поиска размеров видео
+        video_info = re.search(r'\s(\d+)x(\d+)[,\s]', probe_stderr)
+        if video_info:
+            orig_width, orig_height = map(int, video_info.groups())
+            log_callback(f"    Исходный размер видео: {orig_width}x{orig_height}", "info")
+    except Exception as e:
+        log_callback(f"    Ошибка при получении размеров видео: {e}", "warning")
+        return None
+
+    if not (orig_width and orig_height):
+        log_callback("    Не удалось определить исходные размеры видео", "error")
+        return None
+
+    # Теперь запускаем cropdetect
     command = [
         str(FFMPEG_PATH),
-        '-hide_banner', '-loglevel', 'info', # info, чтобы видеть вывод cropdetect
+        '-hide_banner', '-loglevel', 'info',
         '-i', str(filepath),
         '-t', str(duration_for_analysis_sec), 
-        '-vf', f'cropdetect=limit={limit_value/255:.4f}:round=2:reset=0', # limit в cropdetect это float 0-1
+        '-vf', f'cropdetect=limit={limit_value}:round=2:reset=0',
         '-f', 'null', 
         '-' 
     ]
-    log_callback(f"  Запуск cropdetect для {filepath.name} (анализ {duration_for_analysis_sec} сек, предел {limit_value})...", "info")
-    # log_callback(f"    Cropdetect command: {' '.join(command)}", "debug")
-
-    crop_params_str = None
+    
     try:
         creationflags = subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
-        # cropdetect выводит информацию в stderr
         process = subprocess.Popen(command, stderr=subprocess.PIPE, stdout=subprocess.DEVNULL,
-                                   text=True, encoding='utf-8', errors='ignore',
-                                   creationflags=creationflags)
+                               text=True, encoding='utf-8', errors='ignore',
+                               creationflags=creationflags)
         
-        stderr_output = ""
-        # Читаем stderr в реальном времени или ждем завершения
-        # Таймаут на весь процесс, чтобы не зависнуть навсегда
         try:
-            _, stderr_output = process.communicate(timeout=duration_for_analysis_sec + 45) # + запас времени
+            _, stderr_output = process.communicate(timeout=duration_for_analysis_sec + 5)
         except subprocess.TimeoutExpired:
             process.kill()
             _, stderr_output = process.communicate()
-            log_callback(f"    Таймаут ({duration_for_analysis_sec + 45}с) при выполнении cropdetect для {filepath.name}.", "error")
+            log_callback(f"    Таймаут при выполнении cropdetect", "error")
             return None
 
-        last_crop_line = None
-        # Ищем строки с crop= в stderr
-        # [Parsed_cropdetect_0 @ ...] crop=W:H:X:Y
+        # Собираем все найденные параметры кропа
         crop_detections = re.findall(r'crop=(\d+:\d+:\d+:\d+)', stderr_output)
         
         if crop_detections:
-            # cropdetect может выдавать несколько значений, если reset > 0.
-            # Обычно берут последнее или самое частое. При reset=0 (по умолчанию или явно) - последнее.
-            crop_params_str = crop_detections[-1] 
-            log_callback(f"    cropdetect предложил: {crop_params_str}", "info")
-        else:
-            log_callback(f"    cropdetect не вернул параметров обрезки. Проверьте вывод ffmpeg.", "warning")
-            # Для отладки можно показать часть stderr:
-            # stderr_lines = stderr_output.splitlines()
-            # log_callback(f"    Последние строки stderr cropdetect:\n" + "\n".join(stderr_lines[-10:]), "debug")
+            crop_params_str = crop_detections[-1]
+            crop_width, crop_height, crop_x, crop_y = map(int, crop_params_str.split(':'))
+            
+            # Проверяем базовую валидность параметров
+            if not (all(v >= 0 for v in (crop_width, crop_height, crop_x, crop_y)) and
+                   crop_width <= orig_width and crop_height <= orig_height):
+                log_callback(f"    Некорректные параметры кропа: {crop_params_str}", "warning")
+                return None
 
+            # Проверяем, требуется ли обрезка
+            if crop_width == orig_width and crop_height == orig_height and crop_x == 0 and crop_y == 0:
+                log_callback("    Обрезка не требуется - размеры совпадают с исходными", "info")
+                return None
+
+            log_callback(f"    cropdetect предложил: {crop_params_str}", "info")
+            return crop_params_str
+
+        log_callback("    cropdetect не вернул параметров обрезки", "warning")
+        return None
 
     except Exception as e:
-        # Это может быть FileNotFoundError, если ffmpeg не найден на уровне Popen, или другая ошибка
-        log_callback(f"    Ошибка при выполнении Popen/communicate для cropdetect ({filepath.name}): {e}", "error")
-
-    return crop_params_str
+        log_callback(f"    Ошибка при выполнении cropdetect: {e}", "error")
+        return None

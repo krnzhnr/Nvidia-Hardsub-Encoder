@@ -121,6 +121,13 @@ class EncoderWorker(QObject):
         # Возвращаем обе части времени для отображения
         return f"Прошло всего: {elapsed_str} | Осталось для очереди: {eta_str}"
 
+    def calculate_real_elapsed(self) -> str:
+        """Рассчитывает реальное прошедшее время для текущего файла"""
+        if not self.current_file_start_time:
+            return None
+        elapsed_seconds = time.time() - self.current_file_start_time
+        return self.format_time(elapsed_seconds)
+
     def run(self):
         self.total_start_time = time.time()
         output_base_dir = self.output_directory
@@ -135,7 +142,7 @@ class EncoderWorker(QObject):
             except Exception:
                 continue
         self.total_duration = total_duration
-        
+
         try:
             output_base_dir.mkdir(parents=True, exist_ok=True)
         except OSError as e:
@@ -348,7 +355,11 @@ class EncoderWorker(QObject):
                         if self._process.poll() is not None: break
                         else: QThread.msleep(50); continue
                     full_stderr += line
-                    current_time, percent, speed, fps, bitrate_str, eta, elapsed = parse_ffmpeg_output_for_progress(line, duration)
+
+                    # Передаем реальное прошедшее время в парсер прогресса
+                    real_elapsed = self.calculate_real_elapsed()
+                    current_time, percent, speed, fps, bitrate_str, eta, _ = parse_ffmpeg_output_for_progress(line, duration)
+                    
                     if percent is not None:
                         # Рассчитываем оставшееся время для всей очереди
                         try:
@@ -362,10 +373,10 @@ class EncoderWorker(QObject):
 
                         # Форматируем статусное сообщение с информацией о времени текущего файла
                         time_info = []
-                        if elapsed: time_info.append(f"Прошло: {elapsed}")
+                        if real_elapsed: time_info.append(f"Прошло: {real_elapsed}")
                         if eta: time_info.append(f"Осталось: {eta}")
                         time_str = " | ".join(time_info) if time_info else ""
-                        
+
                         status_parts = []
                         status_parts.append(f"{input_file_path.name} ({percent}%)")
                         if time_str: status_parts.append(time_str)
