@@ -73,22 +73,22 @@ class EncoderWorker(QObject):
         self.log_message.emit(message, level)
 
     def stop(self):
+        """
+        Инициирует асинхронную остановку. Этот метод должен быть неблокирующим.
+        """
         self._log("Получен запрос на остановку кодирования...", "warning")
-        self._is_running = False
+        self._is_running = False  # Устанавливаем флаг для выхода из цикла в run()
+
+        # Просто отправляем сигнал процессу, не дожидаясь его завершения здесь.
+        # Рабочий поток сам корректно завершится, когда его цикл прервется.
         if self._process and self._process.poll() is None:
-            self._log("  Попытка остановить текущий процесс FFmpeg...", "info")
+            self._log("  Отправка сигнала terminate процессу FFmpeg...", "info")
             try:
+                # НЕ ИСПОЛЬЗУЕМ .wait() ИЛИ .kill() ЗДЕСЬ
                 self._process.terminate()
-                try:
-                    self._process.wait(timeout=5)
-                    self._log("  Процесс FFmpeg остановлен (terminate).", "info")
-                except subprocess.TimeoutExpired:
-                    self._log("  FFmpeg не ответил на terminate, принудительное завершение (kill)...", "warning")
-                    self._process.kill()
-                    self._process.wait()
-                    self._log("  Процесс FFmpeg принудительно завершен (kill).", "info")
             except Exception as e:
-                self._log(f"  Ошибка при попытке остановить FFmpeg: {e}", "error")
+                # На случай, если процесс уже завершился между poll() и terminate()
+                self._log(f"  Незначительная ошибка при отправке сигнала terminate: {e}", "warning")
 
     def format_time(self, seconds: float) -> str:
         """Форматирует время в секундах в строку ЧЧ:ММ:СС"""

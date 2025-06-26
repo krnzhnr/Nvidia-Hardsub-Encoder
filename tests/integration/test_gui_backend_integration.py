@@ -128,3 +128,42 @@ def test_encoding_completion(main_window, qtbot, qapp, wait_for_message_box):
     assert msg_box is not None
     assert "Завершено" in msg_box.windowTitle()
     msg_box.close()
+
+def test_start_and_stop_encoding_integration(main_window, qtbot, sample_video):
+    """
+    Полноценный интеграционный тест: запуск, остановка и проверка состояния GUI.
+    """
+    # 1. Подготовка: используем настоящий видеофайл из фикстуры
+    test_file = sample_video
+    main_window.files_to_process = [str(test_file)]
+    main_window.list_widget_files.addItems([test_file.name])
+    
+    # 2. Запуск кодирования
+    qtbot.mouseClick(main_window.btn_start_stop, Qt.MouseButton.LeftButton)
+    qtbot.waitUntil(lambda: main_window.encoder_thread is not None, timeout=5000)
+    
+    # Ждем, пока поток запустится и кнопка обновит текст
+    qtbot.waitUntil(lambda: main_window.encoder_thread.isRunning(), timeout=1000)
+    qtbot.waitUntil(lambda: "Остановить" in main_window.btn_start_stop.text(), timeout=1000)
+
+    assert main_window.btn_start_stop.isEnabled()
+
+    qtbot.wait(200) # Даем кодировщику немного поработать
+
+    # 3. Остановка кодирования
+    qtbot.mouseClick(main_window.btn_start_stop, Qt.MouseButton.LeftButton)
+    
+    # Ждем, пока текст на кнопке изменится на "Остановка..."
+    qtbot.waitUntil(lambda: "Остановка" in main_window.btn_start_stop.text(), timeout=1000)
+    assert not main_window.btn_start_stop.isEnabled()
+
+    # 4. Ожидание сигнала о завершении работы
+    with qtbot.waitSignal(main_window.encoder_worker.finished, timeout=10000) as blocker:
+        pass
+
+    assert blocker.signal_triggered
+
+    # 5. Проверка финального состояния GUI
+    qtbot.waitUntil(lambda: "Начать кодирование" in main_window.btn_start_stop.text(), timeout=1000)
+    assert main_window.btn_start_stop.isEnabled()
+    assert main_window.encoder_thread is None
