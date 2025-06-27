@@ -27,7 +27,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(f"DUB NVIDIA HEVC Encoder GUI (APP_DIR: {APP_DIR})")
-        self.setGeometry(100, 100, 950, 1050)
+        self.setGeometry(100, 100, 800, 850)
 
         self.processed_files_count = 0
         self.hw_info = None
