@@ -341,6 +341,7 @@ class EncoderWorker(QObject):
                     crop_params_for_ffmpeg,
                 )
                 self._log(f"  Декодер: {dec_name}, Энкодер: {enc_name}", "info")
+                self._log("  Команда FFmpeg: " + ' '.join(ffmpeg_command), "debug")
 
                 # ... (остальная часть метода run без изменений) ...
                 creationflags = subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
