@@ -84,6 +84,11 @@ class MainWindow(QMainWindow):
         output_dir_layout.addWidget(self.btn_open_output_dir)
         
         layout_output.addLayout(output_dir_layout)
+        
+        self.chk_use_source_path = QCheckBox("Использовать исходный путь")
+        self.chk_use_source_path.stateChanged.connect(self.toggle_output_dir_controls)
+        layout_output.addWidget(self.chk_use_source_path)
+        
         settings_layout_container.addWidget(group_box_output)
 
         # -- Группа 2: Качество видео --
@@ -192,7 +197,10 @@ class MainWindow(QMainWindow):
         scroll_area_logs.setMinimumHeight(150)
         layout.addWidget(scroll_area_logs, 1)
 
-    # ... (остальная часть класса MainWindow без изменений) ...
+    def toggle_output_dir_controls(self, state):
+        is_checked = (state == Qt.CheckState.Checked.value)
+        self.line_edit_output_dir.setEnabled(not is_checked)
+        self.btn_select_output_dir.setEnabled(not is_checked)
 
     def select_output_directory(self):
         directory = QFileDialog.getExistingDirectory(
@@ -210,8 +218,6 @@ class MainWindow(QMainWindow):
         directory_path = self.output_directory # Это Path объект
         
         if not directory_path.exists():
-            # Попытаемся создать директорию, если ее нет, но это не всегда нужно перед открытием
-            # Может быть, лучше просто сообщить, что папки нет
             try:
                 directory_path.mkdir(parents=True, exist_ok=True)
                 self.log_message(f"Папка вывода {directory_path} создана.", "info")
@@ -225,19 +231,15 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Ошибка", f"Указанный путь вывода не является папкой:\n{directory_path}")
             return
 
-        # QDesktopServices.openUrl() более кросс-платформенный для URL, включая file:///
-        # Для локальных путей он тоже должен работать.
-        # Преобразуем Path в URL (file:///...)
-        url = QUrl.fromLocalFile(str(directory_path.resolve())) # resolve() для абсолютного пути
+        url = QUrl.fromLocalFile(str(directory_path.resolve()))
         
         if not QDesktopServices.openUrl(url):
-            # Если QDesktopServices не сработал, пробуем специфичные для ОС методы
             self.log_message(f"QDesktopServices не смог открыть {url}. Пробуем системные методы...", "warning")
             try:
                 current_os = platform.system()
                 abs_path_str = str(directory_path.resolve())
                 if current_os == "Windows":
-                    os.startfile(abs_path_str) # Наиболее надежно для Windows
+                    os.startfile(abs_path_str)
                 elif current_os == "Darwin": # macOS
                     subprocess.run(["open", abs_path_str], check=True)
                 else: # Linux и другие Unix-подобные
@@ -255,12 +257,8 @@ class MainWindow(QMainWindow):
         self.bitrate_controls_widget.setEnabled(not is_lossless_checked)
         if is_lossless_checked:
             self.log_message("Активирован режим Lossless. Настройки битрейта игнорируются.", "info")
-            # БОЛЬШЕ НЕТ АВТОВКЛЮЧЕНИЯ 10-БИТ ЗДЕСЬ
-            # self.chk_force_10bit.setChecked(True) # <-- СТРОКА УДАЛЕНА
         else:
             self.log_message("Режим Lossless деактивирован. Используются настройки битрейта.", "info")
-            # БОЛЬШЕ НЕТ АВТОВЫКЛЮЧЕНИЯ 10-БИТ ЗДЕСЬ
-            # self.chk_force_10bit.setChecked(False) # <-- СТРОКА УДАЛЕНА
     
     def toggle_resolution_combobox(self, state):
         self.combo_resolution.setEnabled(state == Qt.CheckState.Checked.value)
@@ -273,20 +271,18 @@ class MainWindow(QMainWindow):
         self.lbl_derived_bitrates.setText(f"Макс: {max_mbps}M, Буфер: {buf_mbps}M")
 
     def log_message(self, message, level="info"):
-        # Определение цвета в зависимости от уровня
         color_map = {
             "info": "white",
             "error": "red",
             "warning": "yellow",
             "debug": "gray",
-            "success": "lime" # Для успешного завершения файла
+            "success": "lime"
         }
         color = color_map.get(level.lower(), "white")
 
-        # Добавляем сообщение с HTML-форматированием для цвета
         self.log_edit.append(f"<font color='{color}'>{message}</font>")
         self.log_edit.moveCursor(QTextCursor.MoveOperation.End)
-        QCoreApplication.processEvents() # Обновить GUI немедленно
+        QCoreApplication.processEvents()
 
 
     def check_system_components(self):
@@ -305,10 +301,9 @@ class MainWindow(QMainWindow):
             return
 
         self.hw_info, hw_msg = detect_nvidia_hardware()
-        # Логируем каждую строку из hw_msg
         for line in hw_msg.split('\n'):
             level = "info"
-            if "ошибка" in line.lower() or "не найден" in line.lower() and "фильтр субтитров" not in line.lower() : # Фильтр субтитров не критичен
+            if "ошибка" in line.lower() or "не найден" in line.lower() and "фильтр субтитров" not in line.lower() :
                 level = "error"
             elif "предупреждение" in line.lower() or "не найден фильтр субтитров" in line.lower():
                 level = "warning"
@@ -343,19 +338,11 @@ class MainWindow(QMainWindow):
             self.list_widget_files.addItems([Path(f).name for f in files])
             self.log_message(f"Выбрано файлов: {len(files)}", "info")
 
-            self.processed_files_count = 0 # Сбрасываем счетчик обработанных при новом выборе
+            self.processed_files_count = 0
             self.update_overall_progress_display()
 
-            # Если выбран хотя бы один файл, пытаемся получить разрешение первого
-            # и обновить список разрешений в QComboBox
             if self.files_to_process:
                 first_file_path = Path(self.files_to_process[0])
-                # Используем новую функцию, которая сразу дает разрешение
-                # (Предполагаем, что get_video_subtitle_attachment_info теперь тоже возвращает width, height)
-                # Для простоты здесь можно вызвать get_video_resolution напрямую для первого файла
-                # или взять разрешение из первого элемента files_to_process, если мы кэшируем инфо о файлах
-                
-                # Давайте сделаем отдельный вызов для первого файла для обновления UI
                 width, height, err_msg = get_video_resolution(first_file_path)
                 if width and height:
                     self.current_source_width = width
@@ -366,11 +353,11 @@ class MainWindow(QMainWindow):
                     self.current_source_width = None
                     self.current_source_height = None
                     self.log_message(f"Не удалось определить разрешение для {first_file_path.name}: {err_msg}", "warning")
-                    self.combo_resolution.clear() # Очистить, если не удалось
+                    self.combo_resolution.clear()
                     self.combo_resolution.addItem("Не удалось определить исходное разрешение")
-                    self.chk_force_resolution.setChecked(False) # Сбросить чекбокс
+                    self.chk_force_resolution.setChecked(False)
                     self.combo_resolution.setEnabled(False)
-            else: # Если список файлов очищен
+            else:
                 self.current_source_width = None
                 self.current_source_height = None
                 self.combo_resolution.clear()
@@ -387,92 +374,74 @@ class MainWindow(QMainWindow):
                 "x2.0 (Увеличение)": 2.0,
                 "x1.33 (Увеличение)": (1/1.5)*2,
                 "Исходное разрешение": 1.0,
-                "x0.66 (Уменьшение ~1/1.5)": 1/1.5, # ~720p от 1080p
-                "x0.5 (Уменьшение)": 0.5,           # ~1080p от 2160p (4K)
-                # Можно добавить стандартные разрешения, если они подходят
+                "x0.66 (Уменьшение ~1/1.5)": 1/1.5,
+                "x0.5 (Уменьшение)": 0.5,
                 "1080p (если меньше исходного)": (1920, 1080),
                 "720p (если меньше исходного)": (1280, 720),
 
             }
             
-            added_resolutions = set() # Для предотвращения дубликатов
+            added_resolutions = set()
 
             for text_template, val in multipliers.items():
                 target_w, target_h = -1, -1
                 display_text = ""
 
-                if isinstance(val, float): # Это множитель
-                    # Убедимся, что при умножении не превышаем какое-то разумное значение (например, 8K)
-                    # и при делении не уходим в слишком мелкое (например, меньше 360p)
+                if isinstance(val, float):
                     raw_w = int(source_width * val)
                     raw_h = int(source_height * val)
 
-                    # Округление до ближайшего четного числа (важно для yuv420p)
                     target_w = (raw_w // 2) * 2
                     target_h = (raw_h // 2) * 2
                     
-                    # Проверки на минимальный и максимальный размер
-                    if target_w < 240 or target_h < 240 : continue # Слишком маленькое
-                    if val > 1.0 and (target_w > 7680 or target_h > 4320) : continue # Слишком большое (больше 8K)
+                    if target_w < 240 or target_h < 240 : continue
+                    if val > 1.0 and (target_w > 7680 or target_h > 4320) : continue
 
-                    # Если это "Исходное разрешение", то не применяем текст множителя
                     if val == 1.0:
                         display_text = f"Исходное ({target_w}x{target_h})"
                     else:
                         display_text = f"{text_template.split(' ')[0]} ({target_w}x{target_h})"
 
-                elif isinstance(val, tuple): # Это фиксированное разрешение (W, H)
+                elif isinstance(val, tuple):
                     fixed_w, fixed_h = val
-                    # Добавляем, только если оно меньше исходного
                     if fixed_w < source_width and fixed_h < source_height:
                         target_w = fixed_w
                         target_h = fixed_h
                         display_text = f"{text_template.split('(')[0].strip()} ({target_w}x{target_h})"
                     else:
-                        continue # Пропускаем, если оно не меньше исходного
+                        continue
 
                 if target_w > 0 and target_h > 0:
                     res_tuple = (target_w, target_h)
                     if res_tuple not in added_resolutions:
-                        self.combo_resolution.addItem(display_text, userData=res_tuple) # Сохраняем (W,H) в userData
+                        self.combo_resolution.addItem(display_text, userData=res_tuple)
                         added_resolutions.add(res_tuple)
             
-            # Пытаемся выбрать "Исходное разрешение" по умолчанию
             for i in range(self.combo_resolution.count()):
                 if self.combo_resolution.itemData(i) == (source_width, source_height):
                     self.combo_resolution.setCurrentIndex(i)
                     break
-            if self.combo_resolution.count() == 0: # Если ничего не добавилось
+            if self.combo_resolution.count() == 0:
                 self.combo_resolution.addItem(f"Исходное ({source_width}x{source_height})", userData=(source_width, source_height))
     
     
-    def toggle_resolution_options(self, state): # Переименовал
+    def toggle_resolution_options(self, state):
         is_checked = (state == Qt.CheckState.Checked.value)
         self.combo_resolution.setEnabled(is_checked)
         if not is_checked:
-            # Если галочка снята, можно сбросить выбор в комбобоксе на "Исходное", если оно есть
             if self.current_source_width and self.current_source_height:
                 for i in range(self.combo_resolution.count()):
                     if self.combo_resolution.itemData(i) == (self.current_source_width, self.current_source_height):
                         self.combo_resolution.setCurrentIndex(i)
                         break
 
-    # НОВЫЙ СЛОТ ДЛЯ ВЫЗОВА ДИАЛОГА ИЗ РАБОЧЕГО ПОТОКА
     @pyqtSlot(list, str, result='QVariant')
     def prompt_for_subtitle_selection(self, available_tracks, filename):
-        """
-        Показывает диалог выбора дорожки субтитров. Вызывается из потока EncoderWorker.
-        Возвращает словарь выбранной дорожки или None.
-        """
-        # Формируем список для диалога
-        # Добавляем специальный пункт для отмены
         dont_burn_text = "Не вшивать субтитры"
         items = [dont_burn_text]
-        # Сопоставление текста в диалоге с исходным словарем дорожки
         track_map = {}
 
         for track in available_tracks:
-            # Формируем читаемое название дорожки
             title = track.get('title') or 'Без названия'
             lang = track.get('language', '??')
             idx = track['index']
@@ -486,26 +455,22 @@ class MainWindow(QMainWindow):
             f"Для файла '{filename}' не найдены субтитры '{SUBTITLE_TRACK_TITLE_KEYWORD}'.\n"
             "Выберите другую дорожку для вшивания или отмените операцию.",
             items,
-            0, # Индекс по умолчанию (Не вшивать)
-            False # Нельзя редактировать
+            0,
+            False
         )
 
         if ok and selected_item and selected_item != dont_burn_text:
-            # Пользователь выбрал дорожку
-            return track_map.get(selected_item) # Возвращаем словарь дорожки
+            return track_map.get(selected_item)
         else:
-            # Пользователь нажал "Отмена" или выбрал "Не вшивать"
-            return None # Возвращаем None
+            return None
 
     def toggle_encoding(self):
         if self.encoder_thread and self.encoder_thread.isRunning():
-            # Останавливаем кодирование
             if self.encoder_worker:
                 self.encoder_worker.stop()
             self.btn_start_stop.setText("Остановка...")
             self.btn_start_stop.setEnabled(False)
         else:
-            # Начинаем кодирование
             if not self.files_to_process:
                 msg = QMessageBox(QMessageBox.Icon.Warning, "Нет файлов",
                                 "Пожалуйста, выберите файлы для кодирования.", 
@@ -520,27 +485,27 @@ class MainWindow(QMainWindow):
                 msg.show()
                 return
 
+            use_source_path = self.chk_use_source_path.isChecked()
             disable_subtitles = self.chk_disable_subtitles.isChecked()
             use_lossless_mode = self.chk_lossless_mode.isChecked()
             force_10bit_output = self.chk_force_10bit.isChecked()
             
-            target_bitrate = 0 # По умолчанию, если lossless
+            target_bitrate = 0
             if not use_lossless_mode:
                 target_bitrate = self.spin_target_bitrate.value()
 
             force_res_checked = self.chk_force_resolution.isChecked()
             
-            selected_resolution_data = None # Будет (width, height) или None
+            selected_resolution_data = None
             if force_res_checked:
-                selected_resolution_data = self.combo_resolution.currentData() # Получаем (W,H) из userData
-                if not selected_resolution_data: # Если userData почему-то None (например, для "Не удалось определить")
+                selected_resolution_data = self.combo_resolution.currentData()
+                if not selected_resolution_data:
                     self.log_message("Ошибка: Выбрано некорректное значение разрешения. Кодирование с исходным разрешением.", "warning")
-                    force_res_checked = False # Сбрасываем флаг принудительного, т.к. данные некорректны
+                    force_res_checked = False
             
             auto_crop_enabled = self.chk_auto_crop.isChecked()
             
             self.log_edit.clear()
-            # Формируем строку о режиме кодирования
             encoding_mode_str = []
             if use_lossless_mode:
                 encoding_mode_str.append(f"Lossless (QP={LOSSLESS_QP_VALUE})")
@@ -548,14 +513,15 @@ class MainWindow(QMainWindow):
                 encoding_mode_str.append(f"Битрейт {target_bitrate}M")
             
             if force_10bit_output:
-                # Если галочка стоит, это всегда принудительный режим
                 encoding_mode_str.append("10-бит (принудительно)")
             else:
-                # Если галочка снята, режим автоматический
                 encoding_mode_str.append("8/10-бит (авто)")
             
             self.log_message(f"--- Начало сессии кодирования ({', '.join(encoding_mode_str)}) ---", "info")
-            self.log_message(f"Папка вывода: {self.output_directory}", "info")
+            if use_source_path:
+                self.log_message("Папка вывода: рядом с исходными файлами", "info")
+            else:
+                self.log_message(f"Папка вывода: {self.output_directory}", "info")
 
             if force_res_checked and selected_resolution_data:
                 w, h = selected_resolution_data
@@ -563,8 +529,8 @@ class MainWindow(QMainWindow):
             else:
                 self.log_message(f"Используется исходное разрешение файлов.", "info")
             
-            self.processed_files_count = 0 # <--- Сбрасываем счетчик перед новым запуском
-            self.update_overall_progress_display() # Обновляем отображение (0/total)
+            self.processed_files_count = 0
+            self.update_overall_progress_display()
 
             self.encoder_thread = QThread()
             self.encoder_worker = EncoderWorker(
@@ -578,11 +544,11 @@ class MainWindow(QMainWindow):
                 auto_crop_enabled=auto_crop_enabled,
                 force_10bit_output=force_10bit_output,
                 disable_subtitles=disable_subtitles,
+                use_source_path=use_source_path,
                 parent_gui=self
             )
             self.encoder_worker.moveToThread(self.encoder_thread)
 
-            # Подключение сигналов
             self.encoder_worker.progress.connect(self.update_current_file_progress)
             self.encoder_worker.log_message.connect(self.log_message)
             self.encoder_worker.file_processed.connect(self.on_file_processed)
@@ -599,27 +565,27 @@ class MainWindow(QMainWindow):
 
     def set_controls_enabled(self, enabled):
         self.btn_select_files.setEnabled(enabled)
-        # self.spin_target_bitrate.setEnabled(enabled) # Теперь управляется через self.bitrate_controls_widget
-        self.btn_select_output_dir.setEnabled(enabled)
-        self.btn_open_output_dir.setEnabled(True) # Кнопка "Открыть" всегда активна, если путь валиден
-                                                # (или можно привязать к enabled тоже, если не хотим давать открывать во время кодирования)
-                                                # Давайте привяжем к enabled, чтобы избежать открытия во время активного процесса
+        self.chk_use_source_path.setEnabled(enabled)
+        
+        if enabled:
+            self.toggle_output_dir_controls(self.chk_use_source_path.checkState().value)
+        else:
+            self.line_edit_output_dir.setEnabled(False)
+            self.btn_select_output_dir.setEnabled(False)
+            
         self.btn_open_output_dir.setEnabled(enabled)
         self.chk_force_resolution.setEnabled(enabled)
-        self.chk_lossless_mode.setEnabled(enabled) # <--- Управляем доступностью чекбокса lossless
+        self.chk_lossless_mode.setEnabled(enabled)
         self.chk_force_10bit.setEnabled(enabled)
         self.chk_auto_crop.setEnabled(enabled)
         self.chk_disable_subtitles.setEnabled(enabled)
-        # Комбобокс разрешения управляется состоянием чекбокса, но его тоже блокируем/разблокируем
+        
         if enabled:
-            # Если контролы включаются, состояние комбобокса зависит от чекбокса
-            # и от того, удалось ли загрузить варианты разрешений
             can_enable_combo = self.chk_force_resolution.isChecked() and self.combo_resolution.count() > 0 \
                                 and self.combo_resolution.itemText(0) != "Не удалось определить исходное разрешение" \
                                 and self.combo_resolution.itemText(0) != "Нет данных об исходном разрешении"
             self.combo_resolution.setEnabled(can_enable_combo)
         else:
-            # Если контролы выключаются (во время кодирования), комбобокс всегда неактивен
             self.combo_resolution.setEnabled(False)
 
     def update_current_file_progress(self, percentage, status_text):
@@ -627,7 +593,6 @@ class MainWindow(QMainWindow):
         self.lbl_current_file_progress.setText(f"Файл: {status_text}")
 
     def update_overall_progress_display(self):
-        """Обновляет QProgressBar общего прогресса на основе счетчика."""
         total_files = len(self.files_to_process)
         if total_files > 0:
             percentage = int((self.processed_files_count / total_files) * 100)
@@ -635,18 +600,15 @@ class MainWindow(QMainWindow):
         else:
             self.progress_bar_overall.setValue(0)
         
-        # Также обновим метку, чтобы она показывала количество завершенных
-        # или "Готово", если все завершено.
         if self.processed_files_count == total_files and total_files > 0:
             self.lbl_overall_progress.setText(f"Завершено: {self.processed_files_count}/{total_files}")
-        elif total_files > 0 : # Если еще не все, но есть общее количество
+        elif total_files > 0 :
             self.lbl_overall_progress.setText(f"Завершено: {self.processed_files_count}/{total_files}")
-        else: # Если файлов нет или еще не начато
+        else:
             self.lbl_overall_progress.setText("Общий прогресс: -/-")
     
     
     def update_overall_progress_label(self, current_num_processing, total_num, queue_time_str=""):
-        """Обновляет текстовую метку общего прогресса."""
         if queue_time_str:
             self.lbl_overall_progress.setText(f"Обработка файла: {current_num_processing}/{total_num} | {queue_time_str}")
         else:
@@ -657,8 +619,8 @@ class MainWindow(QMainWindow):
         level = "success" if success else "error"
         self.log_message(f"Обработка файла {filename} завершена. Статус: {'Успех' if success else 'Ошибка'}. {message}", level)
         
-        self.processed_files_count += 1 # <--- Увеличиваем счетчик завершенных файлов
-        self.update_overall_progress_display() # <--- Обновляем QProgressBar и метку
+        self.processed_files_count += 1
+        self.update_overall_progress_display()
 
 
     def on_encoding_finished(self):
@@ -706,10 +668,6 @@ class MainWindow(QMainWindow):
             event.accept()
 
     def show_message_box(self, method, title, text, buttons=None, defaultButton=None):
-        """
-        Показывает диалоговое окно с заданными параметрами.
-        method: QMessageBox.information, warning, question, или critical
-        """
         if buttons is None:
             reply = method(self, title, text)
         else:
