@@ -53,3 +53,5 @@ from src.ffmpeg.core import find_executable_in_path
 # Пытаемся найти исполняемые файлы в системе
 FFMPEG_PATH = find_executable_in_path('ffmpeg') or (APP_DIR / FFMPEG_EXE_NAME)
 FFPROBE_PATH = find_executable_in_path('ffprobe') or (APP_DIR / FFPROBE_EXE_NAME)
+
+APP_ICON_PATH = "favicon.ico"

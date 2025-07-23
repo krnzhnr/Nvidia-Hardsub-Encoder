@@ -11,7 +11,7 @@ PYTHON_EXE = os.path.join(VENV_DIR, "Scripts", "python.exe")
 REQUIREMENTS = "requirements.txt"
 SCRIPT = "main.py"
 EXE_BASE_NAME = "HS-NVEncoder"
-ICON = "icon.ico"
+ICON = "favicon.ico"
 
 # === Управление номером сборки ===
 BUILD_NUMBER_FILE = "build_number.txt"
@@ -130,6 +130,8 @@ def build():
     ]
     if os.path.exists(ICON):
         cmd.append(f"--icon={ICON}")
+        cmd.append("--add-data")
+        cmd.append(f"{ICON};.")
     cmd.append(SCRIPT)
     subprocess.check_call(cmd)
     

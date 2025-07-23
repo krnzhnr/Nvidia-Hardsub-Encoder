@@ -2,8 +2,10 @@
 import sys
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtCore import QT_VERSION_STR
+from PyQt6.QtGui import QIcon
 from src.ui.main_window import MainWindow
-from src.app_config import APP_DIR # Для информации
+from src.app_config import APP_DIR, APP_ICON_PATH # Для информации
+from src.resources.resources import resource_path
 from pathlib import Path
 
 if __name__ == '__main__':
@@ -33,6 +35,12 @@ if __name__ == '__main__':
     #     # Можно установить стиль по умолчанию, если файл не найден
     #     app.setStyle('Fusion')
     # ----------------------------------------------------
+    
+    # Установка иконки приложения
+    try:
+        app.setWindowIcon(QIcon(resource_path(APP_ICON_PATH)))
+    except Exception as e:
+        print(f"Не удалось загрузить иконку: {e}")
 
     main_win = MainWindow()
     main_win.show()
