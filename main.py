@@ -18,8 +18,8 @@ if __name__ == '__main__':
 
     app = QApplication(sys.argv)
     
-    # # Можно установить стиль, если хочется
-    app.setStyle('Fusion')
+    # Можно установить стиль, если хочется
+    # app.setStyle('Fusion')
     
     # --- ЗАГРУЗКА И ПРИМЕНЕНИЕ СТИЛЕЙ ИЗ ФАЙЛА QSS ---
     # style_file = APP_DIR / "src" / "ui" / "style.qss"

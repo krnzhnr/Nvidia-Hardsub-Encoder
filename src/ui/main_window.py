@@ -3,7 +3,7 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QListWidget, QProgressBar, QTextEdit,
     QLabel, QFileDialog, QLineEdit, QMessageBox, QSpinBox,
-    QScrollArea, QComboBox, QCheckBox,
+    QScrollArea, QComboBox, QCheckBox, QStyleFactory,
     QInputDialog, QGroupBox, QTabWidget
 )
 from PyQt6.QtCore import Qt, QThread, QCoreApplication, QUrl, pyqtSlot
@@ -120,7 +120,7 @@ class MainWindow(QMainWindow):
         settings_layout.addStretch() # Прижимает группу к верху
         
         layout.addWidget(settings_container, 1)
-        self.tabs.addTab(tab, "1. Файлы и назначение")
+        self.tabs.addTab(tab, "Файлы и назначение")
 
     def _create_video_settings_tab(self):
         """Создает вкладку 2: Настройки кодирования видео"""
@@ -180,7 +180,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(group_box_geometry)
         
         layout.addStretch() # Прижимает группы к верху
-        self.tabs.addTab(tab, "2. Видео")
+        self.tabs.addTab(tab, "Видео")
 
     def _create_audio_settings_tab(self):
         """Создает вкладку 3: Настройки кодирования аудио"""
@@ -196,7 +196,7 @@ class MainWindow(QMainWindow):
         
         layout.addWidget(group_box_audio)
         layout.addStretch()
-        self.tabs.addTab(tab, "3. Аудио")
+        self.tabs.addTab(tab, "Аудио")
 
     def _create_subtitles_tab(self):
         """Создает вкладку 4: Настройки субтитров"""
@@ -212,7 +212,7 @@ class MainWindow(QMainWindow):
         
         layout.addWidget(group_box_subtitles)
         layout.addStretch()
-        self.tabs.addTab(tab, "4. Субтитры")
+        self.tabs.addTab(tab, "Субтитры")
 
     def _create_run_tab(self):
         """Создает вкладку 5: Запуск кодирования и прогресс"""
@@ -233,6 +233,11 @@ class MainWindow(QMainWindow):
         self.progress_bar_overall = QProgressBar()
         progress_layout.addWidget(self.progress_bar_overall)
         
+        fusion_style = QStyleFactory.create('Fusion')
+        if fusion_style:
+            self.progress_bar_current_file.setStyle(fusion_style)
+            self.progress_bar_overall.setStyle(fusion_style)
+        
         layout.addWidget(progress_group)
 
         # -- Кнопка Старт/Стоп --
@@ -248,7 +253,7 @@ class MainWindow(QMainWindow):
         layout.addLayout(button_container_layout)
         
         layout.addStretch()
-        self.tabs.addTab(tab, "5. Запуск")
+        self.tabs.addTab(tab, "Запуск")
 
     def toggle_output_dir_controls(self, state):
         is_checked = (state == Qt.CheckState.Checked.value)
