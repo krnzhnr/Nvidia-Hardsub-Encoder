@@ -5,16 +5,14 @@ import subprocess
 import platform
 import tempfile
 import shutil
-import re
 import time
 
 from src.app_config import (
-    APP_DIR, OUTPUT_SUBDIR, FFMPEG_PATH,
     AUDIO_CODEC, AUDIO_BITRATE, AUDIO_CHANNELS,
     NVENC_PRESET, NVENC_TUNING, NVENC_RC, NVENC_LOOKAHEAD,
     NVENC_AQ, NVENC_AQ_STRENGTH, SUBTITLE_TRACK_TITLE_KEYWORD,
-    FONTS_SUBDIR, DEFAULT_AUDIO_TRACK_LANGUAGE,
-    DEFAULT_AUDIO_TRACK_TITLE, LOSSLESS_QP_VALUE
+    DEFAULT_AUDIO_TRACK_LANGUAGE, LOSSLESS_QP_VALUE,
+    DEFAULT_AUDIO_TRACK_TITLE
 )
 from src.ffmpeg.info import get_video_subtitle_attachment_info
 from src.ffmpeg.command import build_ffmpeg_command
@@ -28,7 +26,7 @@ class EncoderWorker(QObject):
     progress = pyqtSignal(int, str)
     log_message = pyqtSignal(str, str)
     file_processed = pyqtSignal(str, bool, str)
-    finished = pyqtSignal()
+    finished = pyqtSignal(bool)
     overall_progress = pyqtSignal(int, int, str)
 
     def __init__(self, files_to_process: list, target_bitrate_mbps: int, hw_info: dict,
@@ -60,6 +58,7 @@ class EncoderWorker(QObject):
 
         self._is_running = True
         self._process = None
+        self._was_stopped_manually = False
         
         self.total_start_time = None
         self.current_file_start_time = None
@@ -77,6 +76,7 @@ class EncoderWorker(QObject):
         завершения дерева процессов FFmpeg.
         """
         self._log("Получен запрос на остановку кодирования...", "warning")
+        self._was_stopped_manually = True
         self._is_running = False
 
         if self._process and self._process.poll() is None:
@@ -84,21 +84,16 @@ class EncoderWorker(QObject):
             self._log(f"  Попытка остановить процесс FFmpeg с PID: {pid}", "info")
             
             if platform.system() == "Windows":
-                # В Windows используем taskkill для надежного завершения всего дерева процессов
                 try:
                     self._log(f"  Используем taskkill для завершения дерева процессов (PID: {pid})...", "debug")
-                    # /T - завершить дочерние процессы, /F - принудительно
                     kill_cmd = ['taskkill', '/F', '/T', '/PID', str(pid)]
-                    # Запускаем команду, не показывая окно
                     subprocess.run(kill_cmd, check=True, capture_output=True,
                                     creationflags=subprocess.CREATE_NO_WINDOW)
                     self._log(f"  Команда taskkill для PID {pid} выполнена.", "info")
                 except (subprocess.CalledProcessError, FileNotFoundError) as e:
-                    # Если taskkill не сработал, пробуем старый метод
                     self._log(f"  Ошибка taskkill: {e}. Возврат к стандартному terminate().", "error")
                     self._process.terminate()
             else:
-                # Для других ОС (Linux, macOS) terminate() обычно работает надежно
                 self._log("  Используем стандартный метод terminate() для Linux/macOS.", "debug")
                 self._process.terminate()
 
@@ -435,7 +430,7 @@ class EncoderWorker(QObject):
             self._log("\n--- Все файлы обработаны. ---", "info")
         else:
             self._log("\n--- Обработка прервана. ---", "warning")
-        self.finished.emit()
+        self.finished.emit(self._was_stopped_manually)
 
     def analyze_ffmpeg_stderr(self, stderr_text: str) -> str:
         if not stderr_text:
