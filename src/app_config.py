@@ -36,7 +36,7 @@ AUDIO_BITRATE = "256k"
 AUDIO_CHANNELS = "2"
 NVENC_PRESET = 'p7'
 NVENC_TUNING = 'hq'
-NVENC_RC = 'vbr' # CBR, VBR, VBR_HQ. Для динамического битрейта VBR или VBR_HQ
+NVENC_RC = 'vbr_hq' # CBR, VBR, VBR_HQ. Для динамического битрейта VBR или VBR_HQ
 NVENC_LOOKAHEAD = '32'
 NVENC_AQ = '1' # 0 = выкл, 1 = вкл
 NVENC_AQ_STRENGTH = '15' # 1-15 (для AQ=1)
