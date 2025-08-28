@@ -142,7 +142,7 @@ def build_ffmpeg_command(
                 if enc_settings['spatial_aq'] == '1' and 'aq_strength' in enc_settings:
                     encoder_opts.extend(['-aq-strength', enc_settings['aq_strength']])
         
-    encoder_opts.extend(['-multipass', 'fullres', '-2pass', '1']) # В вашем коде это было
+    encoder_opts.extend(['-multipass', '2', '-2pass', '1']) # В вашем коде это было
 
     command.extend(encoder_opts)
     encoder_display_name = hw_info['encoder']  # Используем прямое значение из hw_info
