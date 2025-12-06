@@ -349,6 +349,7 @@ class EncoderWorker(QObject):
             self._log(f"  Кодирование {current_file_name} прервано.", "warning")
             self.file_processed.emit(current_file_name, False, "Кодирование прервано")
         elif exit_code == 0 and exit_status == QProcess.ExitStatus.NormalExit:
+            self.progress.emit(100, f"{current_file_name} (100%) | Завершено")
             self._log(f"  [УСПЕХ] Файл {current_file_name} успешно обработан.", "info")
             self.file_processed.emit(current_file_name, True, "Успешно закодировано")
             if self.current_file_duration:
