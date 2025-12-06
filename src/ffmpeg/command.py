@@ -148,11 +148,14 @@ def build_ffmpeg_command(
     encoder_display_name = hw_info['encoder']  # Используем прямое значение из hw_info
 
     # Параметры аудио кодека
-    command.extend([
-        '-c:a', enc_settings['audio_codec'],
-        '-b:a', enc_settings['audio_bitrate'],
-        '-ac', enc_settings['audio_channels']
-    ])
+    command.extend(['-c:a', enc_settings['audio_codec']])
+    
+    # Добавляем битрейт и каналы ТОЛЬКО если не режим copy
+    if enc_settings['audio_codec'] != 'copy':
+        command.extend([
+            '-b:a', enc_settings['audio_bitrate'],
+            '-ac', enc_settings['audio_channels']
+        ])
 
     command.extend(['-map', '0:v:0', '-map', '0:a:0?'])
 

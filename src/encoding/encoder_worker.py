@@ -259,7 +259,9 @@ class EncoderWorker(QObject):
                 enc_settings['preset'] = 'lossless'
                 enc_settings['rc_mode'] = 'constqp'
                 enc_settings['qp_value'] = LOSSLESS_QP_VALUE
+                enc_settings['audio_codec'] = 'copy'
                 log_parts.append(f"Lossless (QP: {enc_settings['qp_value']})")
+                log_parts.append("Аудио: Copy (без изменений)")
             else:
                 target_br_str = f"{self.target_bitrate_mbps}M"
                 max_br_str = f"{self.target_bitrate_mbps * 2}M"

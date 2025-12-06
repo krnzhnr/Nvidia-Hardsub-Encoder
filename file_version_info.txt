@@ -4,8 +4,8 @@
 # http://msdn.microsoft.com/en-us/library/ms646997.aspx
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(18, 0, 0, 0),
-    prodvers=(18, 0, 0, 0),
+    filevers=(19, 0, 0, 0),
+    prodvers=(19, 0, 0, 0),
     mask=0x3f,
     flags=0x0,
     OS=0x40004,
@@ -20,12 +20,12 @@ VSVersionInfo(
           u'040904B0',
           [StringStruct(u'CompanyName', u''),
            StringStruct(u'FileDescription', u'NVIDIA NVENC Hardsub Encoder'),
-           StringStruct(u'FileVersion', u'build 018'),
+           StringStruct(u'FileVersion', u'build 019'),
            StringStruct(u'InternalName', u'HS-NVEncoder'),
            StringStruct(u'LegalCopyright', u''),
            StringStruct(u'OriginalFilename', u'HS-NVEncoder.exe'),
            StringStruct(u'ProductName', u'HS-NVEncoder'),
-           StringStruct(u'ProductVersion', u'build 018')])
+           StringStruct(u'ProductVersion', u'build 019')])
       ]),
     VarFileInfo([VarStruct(u'Translation', [1033, 1200])])
   ]
