@@ -7,7 +7,10 @@ from PyQt6.QtWidgets import (
     QInputDialog, QGroupBox, QTabWidget
 )
 from PyQt6.QtCore import Qt, QThread, QCoreApplication, QUrl, pyqtSlot
-from PyQt6.QtGui import QPalette, QColor, QTextCursor, QDesktopServices
+from PyQt6.QtGui import (
+    QPalette, QColor, QTextCursor, 
+    QDesktopServices, QDragEnterEvent, QDropEvent
+)
 from pathlib import Path
 import os
 import platform
@@ -28,6 +31,8 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle(f"DUB NVIDIA HEVC Encoder GUI (APP_DIR: {APP_DIR})")
         self.setGeometry(100, 100, 800, 850)
+        
+        self.setAcceptDrops(True)
 
         self.processed_files_count = 0
         self.hw_info = None
@@ -71,6 +76,103 @@ class MainWindow(QMainWindow):
         scroll_area_logs.setWidget(self.log_edit)
         scroll_area_logs.setMinimumHeight(150)
         layout.addWidget(scroll_area_logs, 1)
+    
+    # --- Drag & Drop Events ---
+    def dragEnterEvent(self, event: QDragEnterEvent):
+        """Обработка события перетаскивания файлов в окно."""
+        if event.mimeData().hasUrls():
+            event.accept()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event: QDropEvent):
+        """Обработка события сброса файлов."""
+        files = []
+        for url in event.mimeData().urls():
+            file_path = url.toLocalFile()
+            if file_path.lower().endswith(VIDEO_EXTENSIONS):
+                files.append(file_path)
+
+        if files:
+            self.add_files_to_list(files)
+        else:
+            self.log_message(
+                "Перетащенные файлы не являются поддерживаемыми видеофайлами.",
+                "warning"
+            )
+    
+    def add_files_to_list(self, new_files: list):
+        """Добавляет файлы в список обработки и обновляет UI."""
+        # Проверяем, пуст ли был список до добавления (для логики разрешения)
+        was_empty = len(self.files_to_process) == 0
+        added_count = 0
+
+        for f_path in new_files:
+            # Нормализуем путь
+            f_path_str = str(Path(f_path))
+            if f_path_str not in self.files_to_process:
+                self.files_to_process.append(f_path_str)
+                self.list_widget_files.addItem(Path(f_path_str).name)
+                added_count += 1
+
+        if added_count > 0:
+            self.log_message(f"Добавлено файлов: {added_count}", "info")
+            self.update_overall_progress_display()
+
+            # Если это первая партия файлов, определяем разрешение
+            if was_empty and self.files_to_process:
+                self.check_resolution_for_first_file()
+        else:
+            self.log_message("Файлы уже присутствуют в списке.", "warning")
+    
+    def clear_file_list(self):
+        """Очищает список файлов для обработки."""
+        if not self.files_to_process:
+            return
+
+        self.files_to_process.clear()
+        self.list_widget_files.clear()
+        self.processed_files_count = 0
+        
+        # Сбрасываем информацию о разрешении
+        self.current_source_width = None
+        self.current_source_height = None
+        self.combo_resolution.clear()
+        self.combo_resolution.setEnabled(False)
+        self.chk_force_resolution.setChecked(False)
+        
+        self.update_overall_progress_display()
+        self.log_message("Список файлов очищен.", "info")
+
+    def check_resolution_for_first_file(self):
+        """Определяет разрешение первого файла и обновляет комбобокс."""
+        if not self.files_to_process:
+            return
+
+        first_file_path = Path(self.files_to_process[0])
+        width, height, err_msg = get_video_resolution(first_file_path)
+
+        if width and height:
+            self.current_source_width = width
+            self.current_source_height = height
+            self.log_message(
+                f"Исходное разрешение первого файла ({first_file_path.name}): "
+                f"{width}x{height}", "info"
+            )
+            self.update_resolution_combobox(width, height)
+        else:
+            self.current_source_width = None
+            self.current_source_height = None
+            self.log_message(
+                f"Не удалось определить разрешение для {first_file_path.name}: "
+                f"{err_msg}", "warning"
+            )
+            self.combo_resolution.clear()
+            self.combo_resolution.addItem(
+                "Не удалось определить исходное разрешение"
+            )
+            self.chk_force_resolution.setChecked(False)
+            self.combo_resolution.setEnabled(False)
 
     def _create_files_tab(self):
         """Создает вкладку 1: Выбор файлов и пути назначения"""
@@ -79,20 +181,32 @@ class MainWindow(QMainWindow):
 
         # Левая часть: выбор файлов
         file_selection_layout = QVBoxLayout()
+        
+        # Кнопки управления списком файлов
+        files_buttons_layout = QHBoxLayout()
+        
         self.btn_select_files = QPushButton("Выбрать видеофайлы")
         self.btn_select_files.clicked.connect(self.select_files)
-        file_selection_layout.addWidget(self.btn_select_files)
+        files_buttons_layout.addWidget(self.btn_select_files)
+
+        self.btn_clear_files = QPushButton("Очистить список")
+        self.btn_clear_files.clicked.connect(self.clear_file_list)
+        files_buttons_layout.addWidget(self.btn_clear_files)
+        
+        file_selection_layout.addLayout(files_buttons_layout)
 
         self.list_widget_files = QListWidget()
-        self.list_widget_files.setSelectionMode(QListWidget.SelectionMode.NoSelection)
+        self.list_widget_files.setSelectionMode(
+            QListWidget.SelectionMode.NoSelection
+        )
         file_selection_layout.addWidget(self.list_widget_files)
-        
+
         layout.addLayout(file_selection_layout, 2)
 
         # Правая часть: параметры вывода
         settings_container = QWidget()
         settings_layout = QVBoxLayout(settings_container)
-        
+
         group_box_output = QGroupBox("Параметры вывода")
         layout_output = QVBoxLayout(group_box_output)
 
@@ -102,23 +216,31 @@ class MainWindow(QMainWindow):
         output_dir_layout.addWidget(self.line_edit_output_dir)
 
         self.btn_select_output_dir = QPushButton("Обзор...")
-        self.btn_select_output_dir.clicked.connect(self.select_output_directory)
+        self.btn_select_output_dir.clicked.connect(
+            self.select_output_directory
+        )
         output_dir_layout.addWidget(self.btn_select_output_dir)
 
         self.btn_open_output_dir = QPushButton("Открыть")
-        self.btn_open_output_dir.setToolTip("Открыть выбранную папку вывода в проводнике")
-        self.btn_open_output_dir.clicked.connect(self.open_output_directory_in_explorer)
+        self.btn_open_output_dir.setToolTip(
+            "Открыть выбранную папку вывода в проводнике"
+        )
+        self.btn_open_output_dir.clicked.connect(
+            self.open_output_directory_in_explorer
+        )
         output_dir_layout.addWidget(self.btn_open_output_dir)
-        
+
         layout_output.addLayout(output_dir_layout)
-        
+
         self.chk_use_source_path = QCheckBox("Использовать исходный путь")
-        self.chk_use_source_path.stateChanged.connect(self.toggle_output_dir_controls)
+        self.chk_use_source_path.stateChanged.connect(
+            self.toggle_output_dir_controls
+        )
         layout_output.addWidget(self.chk_use_source_path)
-        
+
         settings_layout.addWidget(group_box_output)
-        settings_layout.addStretch() # Прижимает группу к верху
-        
+        settings_layout.addStretch()  # Прижимает группу к верху
+
         layout.addWidget(settings_container, 1)
         self.tabs.addTab(tab, "Файлы и назначение")
 
