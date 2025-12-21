@@ -331,6 +331,17 @@ class MainWindow(QMainWindow):
         self.chk_disable_subtitles = QCheckBox("Не вшивать надписи")
         self.chk_disable_subtitles.setToolTip("Полностью отключает поиск и вшивание любых субтитров.")
         layout_subtitles.addWidget(self.chk_disable_subtitles)
+
+        self.chk_remove_credit_lines = QCheckBox('Удалить ТБ "ТО Дубляжная"')
+        self.chk_remove_credit_lines.setToolTip(
+            "При активации из субтитров будут удалены строки с технической информацией дабберов\n"
+            "(удаляются строки с конкретными ASS тегами)."
+        )
+        # Отключаем этот чекбокс, если отключены субтитры вообще
+        self.chk_disable_subtitles.toggled.connect(
+            lambda checked: self.chk_remove_credit_lines.setEnabled(not checked)
+        )
+        layout_subtitles.addWidget(self.chk_remove_credit_lines)
         
         layout.addWidget(group_box_subtitles)
         layout.addStretch()
@@ -650,6 +661,7 @@ class MainWindow(QMainWindow):
 
             use_source_path = self.chk_use_source_path.isChecked()
             disable_subtitles = self.chk_disable_subtitles.isChecked()
+            remove_credit_lines = self.chk_remove_credit_lines.isChecked()
             use_lossless_mode = self.chk_lossless_mode.isChecked()
             force_10bit_output = self.chk_force_10bit.isChecked()
             
@@ -708,6 +720,7 @@ class MainWindow(QMainWindow):
                 force_10bit_output=force_10bit_output,
                 disable_subtitles=disable_subtitles,
                 use_source_path=use_source_path,
+                remove_credit_lines=remove_credit_lines,
                 parent_gui=self
             )
             self.encoder_worker.moveToThread(self.encoder_thread)

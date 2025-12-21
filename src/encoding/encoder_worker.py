@@ -47,6 +47,7 @@ class EncoderWorker(QObject):
         force_10bit_output: bool,
         disable_subtitles: bool,
         use_source_path: bool,
+        remove_credit_lines: bool,
         parent_gui: QObject
     ):
         super().__init__()
@@ -61,6 +62,7 @@ class EncoderWorker(QObject):
         self.force_10bit_output = force_10bit_output
         self.disable_subtitles = disable_subtitles
         self.use_source_path = use_source_path
+        self.remove_credit_lines = remove_credit_lines
         self.parent_gui = parent_gui
         self.selected_target_width = None
         self.selected_target_height = None
@@ -264,7 +266,8 @@ class EncoderWorker(QObject):
                 if subtitle_to_burn:
                     subtitle_temp_file = extract_subtitle_track(
                         input_file_path, subtitle_to_burn,
-                        self.current_temp_dir, self._log
+                        self.current_temp_dir, self._log,
+                        remove_credits=self.remove_credit_lines
                     )
 
             # <<< ИЗМЕНЕНИЕ: Возвращена продвинутая логика обрезки (crop)

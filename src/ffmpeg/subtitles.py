@@ -4,12 +4,65 @@ import platform
 from pathlib import Path
 import os
 import time
-# import shlex # Для отладочного вывода команды, если понадобится
 
-from src.app_config import FFMPEG_PATH, FFPROBE_PATH # Импорт из app_config
+from src.app_config import (
+    FFMPEG_PATH,
+    FFPROBE_PATH
+) # Импорт из app_config
 from src.ffmpeg.utils import sanitize_filename_part # Импорт из того же пакета
 
-def extract_subtitle_track(input_file: Path, subtitle_info: dict, temp_dir: Path, log_callback) -> str | None:
+def remove_specific_tags(
+        filepath: Path,
+        log_callback
+):
+    """
+    Удаляет строки из ASS файла, содержащие определенные теги оформления кредитов.
+    """
+    tags_to_remove = [
+        r"{\fad(500,500)\b1\an3\fnTahoma\fs50\shad3\bord1.3\4c&H000000&\4a&H00&}",        # База
+        r"{\fad(500,500)\b1\an3\fnTahoma\fs16.667\shad1\bord0.433\4c&H000000&\4a&H00&}", # Альт
+        r"{\fad(500,500)\b1\an3\fnTahoma\fs100\shad6\bord2.6\4c&H000000&\4a&H00&}"       # 4K
+    ]
+
+    try:
+        # Читаем исходный файл
+        with open(filepath, 'r', encoding='utf-8-sig') as f:
+            lines = f.readlines()
+        
+        cleaned_lines = []
+        removed_count = 0
+
+        for line in lines:
+            found = False
+            # Проверяем наличие любого из запрещенных тегов
+            for tag in tags_to_remove:
+                if tag in line:
+                    found = True
+                    break
+            
+            if found:
+                removed_count += 1
+            else:
+                cleaned_lines.append(line)
+        
+        if removed_count > 0:
+            # Перезаписываем файл, если были удаления
+            with open(filepath, 'w', encoding='utf-8') as f:
+                f.writelines(cleaned_lines)
+            log_callback(f"    [CLEANER] Удалено строк с кредитами: {removed_count}", "info")
+        else:
+            log_callback("    [CLEANER] Теги кредитов не найдены.", "debug")
+
+    except Exception as e:
+        log_callback(f"    [CLEANER] Ошибка при очистке субтитров: {e}", "warning")
+
+def extract_subtitle_track(
+        input_file: Path,
+        subtitle_info: dict,
+        temp_dir: Path,
+        log_callback,
+        remove_credits: bool = False
+) -> str | None:
     """
     Извлекает указанную дорожку субтитров во временный .ass файл.
     subtitle_info: словарь {'index': int, 'title': str}.
@@ -102,6 +155,8 @@ def extract_subtitle_track(input_file: Path, subtitle_info: dict, temp_dir: Path
         
         if subtitle_temp_file_path.is_file() and subtitle_temp_file_path.stat().st_size > 0:
             log_callback(f"    Субтитры '{subtitle_title}' успешно извлечены и сохранены как ASS.", "info")
+            if remove_credits:
+                remove_specific_tags(subtitle_temp_file_path, log_callback)
             return str(subtitle_temp_file_path)
         else:
             # Это условие маловероятно, если check=True не вызвало исключение, но для полноты
