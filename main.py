@@ -1,16 +1,17 @@
-# main.py
 import sys
-from PyQt6.QtWidgets import QApplication
+
 from PyQt6.QtCore import QT_VERSION_STR
 from PyQt6.QtGui import QIcon
-from src.ui.main_window import MainWindow
-from src.app_config import APP_DIR, APP_ICON_PATH # Для информации
+from PyQt6.QtWidgets import QApplication
+
+from src.app_config import APP_DIR, APP_ICON_PATH
 from src.resources.resources import resource_path
-from pathlib import Path
+from src.ui.main_window import MainWindow
+
 
 if __name__ == '__main__':
-    # Это нужно для корректного отображения ID приложения в Windows (для иконки на панели задач и т.д.)
-    # Особенно если приложение будет собрано в EXE
+    # Это нужно для корректного отображения ID приложения в Windows
+    # (для иконки на панели задач и т.д.)
     if sys.platform == "win32":
         import ctypes
         myappid = u'mycompany.myproduct.subproduct.version' # произвольная строка
@@ -44,7 +45,7 @@ if __name__ == '__main__':
 
     main_win = MainWindow()
     main_win.show()
-    
+
     print(f"Приложение запущено из: {APP_DIR}")
     print(f"Используется PyQt {QT_VERSION_STR}")
 

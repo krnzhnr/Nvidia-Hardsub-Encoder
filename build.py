@@ -1,9 +1,10 @@
-import subprocess
 import os
-import sys
 import shutil
-import pyperclip  # для копирования в буфер обмена
-import time  # добавляем импорт time
+import subprocess
+import sys
+import time
+
+import pyperclip
 
 # === Настройки ===
 VENV_DIR = "venv"
@@ -16,17 +17,20 @@ ICON = "favicon.ico"
 # === Управление номером сборки ===
 BUILD_NUMBER_FILE = "build_number.txt"
 
+
 def get_build_number():
     if os.path.exists(BUILD_NUMBER_FILE):
         with open(BUILD_NUMBER_FILE, "r") as f:
             return int(f.read().strip())
     return 0
 
+
 def increment_build_number():
     build_num = get_build_number() + 1
     with open(BUILD_NUMBER_FILE, "w") as f:
         f.write(str(build_num))
     return build_num
+
 
 # === Проверка наличия venv ===
 def ensure_venv():
@@ -36,14 +40,20 @@ def ensure_venv():
     else:
         print("[✓] venv уже существует")
 
+
 # === Установка зависимостей ===
 def install_deps():
     print("[*] Установка зависимостей...")
-    subprocess.check_call([PYTHON_EXE, "-m", "pip", "install", "--upgrade", "pip"])
+    subprocess.check_call(
+        [PYTHON_EXE, "-m", "pip", "install", "--upgrade", "pip"]
+    )
     if os.path.exists(REQUIREMENTS):
-        subprocess.check_call([PYTHON_EXE, "-m", "pip", "install", "-r", REQUIREMENTS])
+        subprocess.check_call(
+            [PYTHON_EXE, "-m", "pip", "install", "-r", REQUIREMENTS]
+        )
     else:
         print("[!] requirements.txt не найден — пропускаю установку")
+
 
 # === Очистка сборочных папок ===
 def clean():
@@ -52,12 +62,13 @@ def clean():
         if os.path.exists(folder):
             print(f"[*] Удаляю {folder}...")
             shutil.rmtree(folder)
-    
+
     # Удаляем все .spec файлы
     for file in os.listdir():
         if file.endswith(".spec"):
             print(f"[*] Удаляю {file}...")
             os.remove(file)
+
 
 def create_version_file(build_num_formatted):
     # Преобразуем строку с ведущими нулями в целое число для filevers
@@ -97,10 +108,12 @@ VSVersionInfo(
     with open('file_version_info.txt', 'w', encoding='utf-8') as f:
         f.write(version_info)
 
+
 def get_commit_message():
     print("\n[?] Введите заголовок коммита (или нажмите Enter для пропуска):")
     message = input().strip()
     return message if message else None
+
 
 # === Сборка через PyInstaller ===
 def build():
@@ -108,16 +121,16 @@ def build():
     build_num = increment_build_number()
     build_num_formatted = f"{build_num:03d}"
     print(f"[*] Номер сборки: {build_num_formatted}")
-    
+
     # Запрашиваем заголовок коммита
     commit_message = get_commit_message()
-    
+
     # Создаем файл версии с текущим номером билда
     create_version_file(build_num_formatted)
-    
+
     # Добавляем номер сборки к имени файла
     exe_name = f"{EXE_BASE_NAME}-build{build_num_formatted}"
-    
+
     cmd = [
         PYTHON_EXE,
         "-m", "PyInstaller",
@@ -126,24 +139,26 @@ def build():
         "--onefile",
         "--noconsole",
         f"--name={exe_name}",
-        f"--version-file=file_version_info.txt"
+        "--version-file=file_version_info.txt"
     ]
     if os.path.exists(ICON):
         cmd.append(f"--icon={ICON}")
         cmd.append("--add-data")
         cmd.append(f"{ICON};.")
     cmd.append(SCRIPT)
+
     subprocess.check_call(cmd)
-    
+
     # Формируем и копируем текст для коммита в буфер обмена
     if commit_message:
         build_text = f"[build {build_num_formatted}] {commit_message}"
     else:
         build_text = f"build {build_num_formatted}"
-    
+
     pyperclip.copy(build_text)
     print(f"[✓] Текст '{build_text}' скопирован в буфер обмена")
     print(f"[✓] Готово! exe находится в dist/{exe_name}.exe")
+
 
 # === Главный запуск ===
 if __name__ == "__main__":
