@@ -7,7 +7,7 @@ from src.ui.main_window import MainWindow
 
 def test_window_initial_state(main_window, qapp):
     """Проверка начального состояния окна"""
-    assert "DUB NVIDIA HEVC Encoder GUI" in main_window.windowTitle()
+    assert "Hardsub Encoder GUI" in main_window.windowTitle()
     assert main_window.files_to_process == []
     assert main_window.processed_files_count == 0
     assert main_window.encoder_thread is None

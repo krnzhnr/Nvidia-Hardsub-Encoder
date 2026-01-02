@@ -22,7 +22,7 @@ else:
 VIDEO_EXTENSIONS = (
     '.mp4', '.mkv', '.avi', '.mov', '.ts', '.m2ts', '.webm', '.flv'
 )
-OUTPUT_SUBDIR = "ENCODED_HEVC_NVIDIA_GUI"
+OUTPUT_SUBDIR = "ENCODED"
 
 # Настройки по умолчанию, которые могут быть изменены через GUI или сохранены
 DEFAULT_TARGET_V_BITRATE_MBPS = 4  # в Мбит/с

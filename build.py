@@ -11,7 +11,7 @@ VENV_DIR = "venv"
 PYTHON_EXE = os.path.join(VENV_DIR, "Scripts", "python.exe")
 REQUIREMENTS = "requirements.txt"
 SCRIPT = "main.py"
-EXE_BASE_NAME = "HS-NVEncoder"
+EXE_BASE_NAME = "HS-Encoder"
 ICON = "favicon.ico"
 
 # === Управление номером сборки ===
@@ -94,12 +94,12 @@ VSVersionInfo(
         StringTable(
           u'040904B0',
           [StringStruct(u'CompanyName', u''),
-           StringStruct(u'FileDescription', u'NVIDIA NVENC Hardsub Encoder'),
+           StringStruct(u'FileDescription', u'Hardsub Encoder'),
            StringStruct(u'FileVersion', u'build {build_num_formatted}'),
-           StringStruct(u'InternalName', u'HS-NVEncoder'),
+           StringStruct(u'InternalName', u'HS-Encoder'),
            StringStruct(u'LegalCopyright', u''),
-           StringStruct(u'OriginalFilename', u'HS-NVEncoder.exe'),
-           StringStruct(u'ProductName', u'HS-NVEncoder'),
+           StringStruct(u'OriginalFilename', u'HS-Encoder.exe'),
+           StringStruct(u'ProductName', u'HS-Encoder'),
            StringStruct(u'ProductVersion', u'build {build_num_formatted}')])
       ]),
     VarFileInfo([VarStruct(u'Translation', [1033, 1200])])

@@ -61,7 +61,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(
-            f"DUB NVIDIA HEVC Encoder GUI (APP_DIR: {APP_DIR})"
+            f"Hardsub Encoder GUI (APP_DIR: {APP_DIR})"
         )
         self.setGeometry(100, 100, 800, 850)
 
@@ -422,18 +422,20 @@ class MainWindow(QMainWindow):
         self.spin_nv_lookahead.setValue(int(NVENC_LOOKAHEAD))
         self.spin_nv_lookahead.setToolTip("Количество кадров для анализа (обычно 16-32).")
         
+        
         self.chk_nv_lookahead.toggled.connect(self.spin_nv_lookahead.setEnabled)
         
         l_nv_lookahead.addWidget(self.chk_nv_lookahead)
         l_nv_lookahead.addWidget(self.spin_nv_lookahead)
-        l_nv_lookahead.addStretch()
-        
-        layout_nv_advanced.addWidget(self.widget_nv_lookahead)
-        
+
         self.chk_nv_aq = QCheckBox("Spatial AQ")
         self.chk_nv_aq.setChecked(True)
         self.chk_nv_aq.setToolTip("Пространственное адаптивное квантование (улучшает качество в сложных сценах).")
-        layout_nv_advanced.addWidget(self.chk_nv_aq)
+        l_nv_lookahead.addWidget(self.chk_nv_aq)
+
+        l_nv_lookahead.addStretch()
+        
+        layout_nv_advanced.addWidget(self.widget_nv_lookahead)
         
         layout_nvenc.addLayout(layout_nv_advanced)
         
