@@ -2,6 +2,7 @@ import platform
 from pathlib import Path
 
 from src.app_config import APP_DIR, FFMPEG_PATH, FONTS_SUBDIR
+from src.ffmpeg.utils import escape_ffmpeg_path
 
 
 def build_ffmpeg_command(
@@ -61,11 +62,8 @@ def build_ffmpeg_command(
             frames_on_gpu = False
 
         subtitle_path_posix = Path(subtitle_temp_file_path).as_posix()
-        # Экранирование для Windows: C:/путь -> C\:/путь
-        if platform.system() == "Windows":
-            subtitle_path_escaped = subtitle_path_posix.replace(":", "\\:")
-        else:
-            subtitle_path_escaped = subtitle_path_posix
+        # Используем надежное экранирование для фильтров
+        subtitle_path_escaped = escape_ffmpeg_path(subtitle_path_posix)
 
         subtitle_filter_string = f"subtitles=filename='{subtitle_path_escaped}'"
 
@@ -81,9 +79,8 @@ def build_ffmpeg_command(
                 fontsdir_to_use_str = static_fonts_dir.as_posix()
 
         if fontsdir_to_use_str:
-            if platform.system() == "Windows":
-                fontsdir_to_use_str = fontsdir_to_use_str.replace(":", "\\:")
-            subtitle_filter_string += f":fontsdir='{fontsdir_to_use_str}'"
+            fontsdir_escaped = escape_ffmpeg_path(fontsdir_to_use_str)
+            subtitle_filter_string += f":fontsdir='{fontsdir_escaped}'"
 
         vf_items.append(subtitle_filter_string)
 
