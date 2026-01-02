@@ -1,6 +1,7 @@
 import os
 import sys
 
+
 def resource_path(relative_path: str) -> str:
     """
     Возвращает абсолютный путь к ресурсу. Работает как для режима

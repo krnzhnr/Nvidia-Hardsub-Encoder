@@ -3,14 +3,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QMessageBox, QApplication
 from src.ui.main_window import MainWindow
 
-@pytest.fixture
-def main_window(qtbot, mock_nvidia_hardware, mock_ffmpeg_paths):
-    window = MainWindow()
-    qtbot.addWidget(window)
-    # Инициализируем начальные значения
-    window.progress_bar_current_file.setValue(0)
-    window.progress_bar_overall.setValue(0)
-    return window
+
 
 def test_window_initial_state(main_window, qapp):
     """Проверка начального состояния окна"""
@@ -59,18 +52,20 @@ def test_log_message_functionality(main_window, qapp):
     main_window.log_message("Предупреждение", "warning")
     assert "Предупреждение" in main_window.log_edit.toPlainText()
 
-def test_start_stop_button_state(main_window, qtbot, qapp, wait_for_message_box):
+def test_start_stop_button_state(main_window, qtbot, qapp, mocker):
     """Проверка состояний кнопки Старт/Стоп"""
     assert main_window.btn_start_stop.text() == "Начать кодирование"
     
+    # Мокаем QMessageBox.warning
+    mock_warning = mocker.patch('src.ui.main_window.QMessageBox.warning')
+
     # Пытаемся начать кодирование без файлов
     qtbot.mouseClick(main_window.btn_start_stop, Qt.MouseButton.LeftButton)
     qtbot.wait(200)  # Увеличиваем время ожидания
     
-    msg_box = wait_for_message_box(timeout=2000)  # Увеличиваем таймаут
-    assert msg_box is not None
-    assert "файлы" in msg_box.text().lower()
-    msg_box.close()
+    # Проверяем, что предупреждение было показано
+    mock_warning.assert_called_once()
+    assert "файлы" in mock_warning.call_args[0][2].lower()
 
 @pytest.mark.parametrize("control,expected_state", [
     ("chk_lossless_mode", True),
@@ -102,3 +97,35 @@ def test_resolution_combobox_updates(main_window, qapp):
             resolution_found = True
             break
     assert resolution_found, "Разрешение 1920x1080 не найдено в списке"
+
+def test_audio_controls_existence(main_window, qapp):
+    """Проверка наличия элементов управления аудио"""
+    # Проверяем наличие комбобоксов
+    assert main_window.combo_audio_codec.count() > 0
+    assert main_window.combo_audio_bitrate.count() > 0
+    assert main_window.combo_audio_channels.count() > 0
+    
+    # Проверяем дефолтные значения
+    assert main_window.edit_audio_title.text() == "Русский [Дубляжная]"
+    assert main_window.edit_audio_lang.text() == "rus"
+    assert main_window.combo_audio_bitrate.currentText() == "256k"
+
+def test_audio_settings_toggle(main_window, qtbot):
+    """Проверка переключения доступности настроек аудио"""
+    # 1. Выбираем 'copy'
+    main_window.combo_audio_codec.setCurrentText('copy')
+    qtbot.wait(100)
+    assert not main_window.combo_audio_bitrate.isEnabled()
+    assert not main_window.combo_audio_channels.isEnabled()
+    
+    # 2. Выбираем 'flac'
+    main_window.combo_audio_codec.setCurrentText('flac')
+    qtbot.wait(100)
+    assert not main_window.combo_audio_bitrate.isEnabled()
+    assert main_window.combo_audio_channels.isEnabled()
+    
+    # 3. Выбираем 'aac'
+    main_window.combo_audio_codec.setCurrentText('aac')
+    qtbot.wait(100)
+    assert main_window.combo_audio_bitrate.isEnabled()
+    assert main_window.combo_audio_channels.isEnabled()
