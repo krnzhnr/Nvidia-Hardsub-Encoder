@@ -691,6 +691,7 @@ class MainWindow(QMainWindow):
         self.btn_start_stop = QPushButton("Начать кодирование")
         self.btn_start_stop.setFixedHeight(40)
         self.btn_start_stop.setToolTip("Запустить процесс обработки добавленных файлов.")
+        self.btn_start_stop.setStyleSheet("padding-left: 20px; padding-right: 20px;")
         self.btn_start_stop.clicked.connect(self.toggle_encoding)
 
         # Центрируем кнопку
