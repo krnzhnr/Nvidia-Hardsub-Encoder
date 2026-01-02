@@ -40,6 +40,8 @@ def encoder_worker(tmp_path, mock_hw_info):
         auto_crop_enabled=False,
         force_10bit_output=False,
         disable_subtitles=False,
+        use_source_path=False,
+        remove_credit_lines=False,
         parent_gui=MockMainWindow()
     )
 

@@ -52,15 +52,19 @@ def test_subtitle_controls_interaction(main_window, qtbot, qapp):
     qtbot.wait(100)
     assert main_window.chk_disable_subtitles.isChecked()
 
-def test_encoding_start_without_files(main_window, qtbot, qapp, wait_for_message_box):
+def test_encoding_start_without_files(main_window, qtbot, qapp, mocker):
     """Проверка попытки запуска кодирования без выбранных файлов"""
-    qtbot.mouseClick(main_window.btn_start_stop, Qt.MouseButton.LeftButton)
-    qtbot.wait(200)  # Увеличиваем время ожидания
+    # Мокаем QMessageBox.warning
+    mock_warning = mocker.patch('src.ui.main_window.QMessageBox.warning')
     
-    msg_box = wait_for_message_box(timeout=2000)  # Увеличиваем таймаут
-    assert msg_box is not None
-    assert "файлы" in msg_box.text().lower()
-    msg_box.close()
+    qtbot.mouseClick(main_window.btn_start_stop, Qt.MouseButton.LeftButton)
+    qtbot.wait(200)
+
+    # Проверяем, что предупреждение было показано
+    mock_warning.assert_called_once()
+    args = mock_warning.call_args[0]
+    # args[0] is parent (self/main_window), args[1] is title, args[2] is text
+    assert "Нет файлов" in args[1]
 
 @pytest.mark.parametrize("use_lossless,force_10bit,expected_mode", [
     (True, False, "Lossless"),
@@ -114,9 +118,12 @@ def test_progress_updates(main_window, qtbot, qapp):
     qtbot.wait(100)
     assert main_window.progress_bar_overall.value() == 50  # 1 из 2 файлов = 50%
 
-def test_encoding_completion(main_window, qtbot, qapp, wait_for_message_box):
+def test_encoding_completion(main_window, qtbot, qapp, mocker):
     """Проверка завершения кодирования"""
-    main_window.on_encoding_finished()
+    # Мокаем QMessageBox.information
+    mock_info = mocker.patch('src.ui.main_window.QMessageBox.information')
+    
+    main_window.on_encoding_finished(was_manually_stopped=False)
     qtbot.wait(200)  # Увеличиваем время ожидания
     
     # Проверяем состояние после завершения
@@ -124,10 +131,9 @@ def test_encoding_completion(main_window, qtbot, qapp, wait_for_message_box):
     assert main_window.btn_start_stop.isEnabled()
     assert main_window.bitrate_controls_widget.isEnabled()
     
-    msg_box = wait_for_message_box(timeout=2000)  # Увеличиваем таймаут
-    assert msg_box is not None
-    assert "Завершено" in msg_box.windowTitle()
-    msg_box.close()
+    # Проверяем вызов информационного окна
+    mock_info.assert_called_once()
+    assert "Завершено" in mock_info.call_args[0][1]
 
 def test_start_and_stop_encoding_integration(main_window, qtbot, sample_video):
     """
@@ -150,6 +156,11 @@ def test_start_and_stop_encoding_integration(main_window, qtbot, sample_video):
 
     qtbot.wait(200) # Даем кодировщику немного поработать
 
+    # Сохраняем ссылку на воркера ПЕРЕД остановкой, так как после остановки
+    # и завершения потока main_window.encoder_worker может стать None
+    worker = main_window.encoder_worker
+    assert worker is not None
+
     # 3. Остановка кодирования
     qtbot.mouseClick(main_window.btn_start_stop, Qt.MouseButton.LeftButton)
     
@@ -158,7 +169,7 @@ def test_start_and_stop_encoding_integration(main_window, qtbot, sample_video):
     assert not main_window.btn_start_stop.isEnabled()
 
     # 4. Ожидание сигнала о завершении работы
-    with qtbot.waitSignal(main_window.encoder_worker.finished, timeout=10000) as blocker:
+    with qtbot.waitSignal(worker.finished, timeout=10000) as blocker:
         pass
 
     assert blocker.signal_triggered

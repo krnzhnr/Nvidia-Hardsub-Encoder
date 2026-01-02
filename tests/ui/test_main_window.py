@@ -59,18 +59,20 @@ def test_log_message_functionality(main_window, qapp):
     main_window.log_message("Предупреждение", "warning")
     assert "Предупреждение" in main_window.log_edit.toPlainText()
 
-def test_start_stop_button_state(main_window, qtbot, qapp, wait_for_message_box):
+def test_start_stop_button_state(main_window, qtbot, qapp, mocker):
     """Проверка состояний кнопки Старт/Стоп"""
     assert main_window.btn_start_stop.text() == "Начать кодирование"
     
+    # Мокаем QMessageBox.warning
+    mock_warning = mocker.patch('src.ui.main_window.QMessageBox.warning')
+
     # Пытаемся начать кодирование без файлов
     qtbot.mouseClick(main_window.btn_start_stop, Qt.MouseButton.LeftButton)
     qtbot.wait(200)  # Увеличиваем время ожидания
     
-    msg_box = wait_for_message_box(timeout=2000)  # Увеличиваем таймаут
-    assert msg_box is not None
-    assert "файлы" in msg_box.text().lower()
-    msg_box.close()
+    # Проверяем, что предупреждение было показано
+    mock_warning.assert_called_once()
+    assert "файлы" in mock_warning.call_args[0][2].lower()
 
 @pytest.mark.parametrize("control,expected_state", [
     ("chk_lossless_mode", True),
