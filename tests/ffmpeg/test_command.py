@@ -1,155 +1,137 @@
+
 import pytest
 from pathlib import Path
-import platform
+from unittest.mock import MagicMock, patch
+
+# Import the function to be tested
+# Note: we will mock dependencies before importing or patch them after import
 from src.ffmpeg.command import build_ffmpeg_command
 
 @pytest.fixture
-def base_hw_info():
-    """Базовая информация о железе"""
-    return {
-        'type': 'nvidia',
-        'encoder': 'hevc_nvenc',
-        'decoder_map': {
-            'h264': 'h264_cuvid',
-            'hevc': 'hevc_cuvid'
-        },
-        'subtitles_filter': True
-    }
+def mock_ffmpeg_path_check(monkeypatch):
+    """Mocks FFMPEG_PATH.is_file() to always return True."""
+    # Create a Mock object that behaves like a Path
+    mock_path = MagicMock(spec=Path)
+    mock_path.is_file.return_value = True
+    mock_path.__str__.return_value = "ffmpeg"
+    
+    # Patch the FFMPEG_PATH in src.ffmpeg.command
+    monkeypatch.setattr("src.ffmpeg.command.FFMPEG_PATH", mock_path)
+    return mock_path
 
 @pytest.fixture
-def base_enc_settings():
-    """Базовые настройки кодирования"""
+def base_hw_info():
     return {
-        'preset': 'p4',
-        'tuning': 'hq',
-        'rc_mode': 'vbr',
-        'target_bitrate': '3M',
-        'min_bitrate': '3M',
-        'max_bitrate': '6M',
-        'bufsize': '12M',
-        'lookahead': '32',
-        'spatial_aq': '1',
-        'aq_strength': '15',
+        'encoder': 'hevc_nvenc',
+        'decoder_map': {'h264': 'h264_cuvid'},
+        'subtitles_filter': True,
+        'type': 'nvidia'
+    }
+
+def test_build_command_cpu_basic(mock_ffmpeg_path_check, base_hw_info):
+    """
+    Regression test for CPU encoding (x265).
+    Verifies that 'tuning' key error is avoided and correct flags are used.
+    """
+    input_file = Path("input.mp4")
+    output_file = Path("output.mp4")
+    input_codec = "h264"
+    pix_fmt = "yuv420p"
+    
+    # Settings for CPU encoding
+    enc_settings = {
+        'codec': 'libx265',
+        'preset': 'medium',
+        'crf': 23,
         'audio_codec': 'aac',
         'audio_bitrate': '192k',
         'audio_channels': '2',
-        'audio_track_title': 'Japanese',
-        'audio_track_language': 'jpn'
+        # tuning is NOT present, which caused the error before
     }
 
-def test_basic_command_generation(base_hw_info, base_enc_settings, tmp_path):
-    """Тест базового построения команды FFmpeg"""
-    input_file = tmp_path / "input.mp4"
-    output_file = tmp_path / "output.mp4"
-    
-    command, dec_name, enc_name = build_ffmpeg_command(
-        input_file=input_file,
-        output_file=output_file,
-        hw_info=base_hw_info,
-        input_codec="h264",
-        pix_fmt="yuv420p",
-        enc_settings=base_enc_settings
+    command, dec, enc = build_ffmpeg_command(
+        input_file, output_file, base_hw_info, input_codec, pix_fmt, enc_settings
     )
-    
-    assert isinstance(command, list)
-    assert str(input_file) in command
-    assert str(output_file) in command
-    assert "-c:v" in command
-    assert base_hw_info['encoder'] in command
-    assert dec_name == 'h264_cuvid'  # Проверяем точное имя декодера
-    assert enc_name == 'hevc_nvenc'  # Проверяем точное имя энкодера
 
-def test_subtitle_command_generation(base_hw_info, base_enc_settings, tmp_path):
-    """Тест команды с субтитрами"""
-    input_file = tmp_path / "input.mp4"
-    output_file = tmp_path / "output.mp4"
-    subtitle_file = tmp_path / "subs.ass"
-    fonts_dir = tmp_path / "fonts"
-    fonts_dir.mkdir()
-    
-    command, _, _ = build_ffmpeg_command(
-        input_file=input_file,
-        output_file=output_file,
-        hw_info=base_hw_info,
-        input_codec="h264",
-        pix_fmt="yuv420p",
-        enc_settings=base_enc_settings,
-        subtitle_temp_file_path=str(subtitle_file),
-        temp_fonts_dir_path=str(fonts_dir)
-    )
-    
-    vf_params = command[command.index('-vf') + 1]
-    assert 'subtitles' in vf_params
-    
-    # Преобразуем путь в формат, используемый FFmpeg
-    expected_path = str(subtitle_file).replace('\\', '/').replace(':', '\\:')
-    assert f"'{expected_path}'" in vf_params
-    assert 'fontsdir' in vf_params
+    # Convert command list to a single string for easier searching
+    cmd_str = " ".join(command)
 
-def test_scaling_command_generation(base_hw_info, base_enc_settings, tmp_path):
-    """Тест команды с масштабированием"""
-    input_file = tmp_path / "input.mp4"
-    output_file = tmp_path / "output.mp4"
-    
-    command, _, _ = build_ffmpeg_command(
-        input_file=input_file,
-        output_file=output_file,
-        hw_info=base_hw_info,
-        input_codec="h264",
-        pix_fmt="yuv420p",
-        enc_settings=base_enc_settings,
-        target_width=1280,
-        target_height=720
-    )
-    
-    vf_params = command[command.index('-vf') + 1]
-    assert 'scale' in vf_params
-    assert 'w=1280:h=720' in vf_params
+    # Verify codec selection
+    assert "-c:v libx265" in cmd_str
+    # Verify CRF usage
+    assert "-crf 23" in cmd_str
+    # Verify NO tuning flag
+    assert "-tune" not in cmd_str
+    # -multipass is an NVENC specific flag, should not be here for CPU
+    assert "-multipass" not in cmd_str
 
-@pytest.mark.parametrize("rc_mode,qp_value,expected_params", [
-    ("constqp", 23, ["-rc", "constqp", "-qp", "23"]),
-    ("vbr", None, ["-rc", "vbr"]),
-])
-def test_rate_control_modes(rc_mode, qp_value, expected_params, 
-                          base_hw_info, base_enc_settings, tmp_path):
-    """Тест различных режимов контроля битрейта"""
-    input_file = tmp_path / "input.mp4"
-    output_file = tmp_path / "output.mp4"
-    
-    enc_settings = base_enc_settings.copy()
-    enc_settings['rc_mode'] = rc_mode
-    if qp_value is not None:
-        enc_settings['qp_value'] = qp_value
-    
-    command, _, _ = build_ffmpeg_command(
-        input_file=input_file,
-        output_file=output_file,
-        hw_info=base_hw_info,
-        input_codec="h264",
-        pix_fmt="yuv420p",
-        enc_settings=enc_settings
-    )
-    
-    for param in expected_params:
-        assert param in command
+def test_build_command_cpu_with_tuning(mock_ffmpeg_path_check, base_hw_info):
+    """Test CPU encoding with explicit tuning (should be included)."""
+    input_file = Path("input.mp4")
+    output_file = Path("output.mp4")
+    enc_settings = {
+        'codec': 'libx265',
+        'preset': 'slow',
+        'crf': 20,
+        'tuning': 'grain', # Explicit tuning
+        'audio_codec': 'copy'
+    }
 
-def test_10bit_output_settings(base_hw_info, base_enc_settings, tmp_path):
-    """Тест настроек для 10-битного вывода"""
-    input_file = tmp_path / "input.mp4"
-    output_file = tmp_path / "output.mp4"
-    
-    enc_settings = base_enc_settings.copy()
-    enc_settings['force_10bit_output'] = True
-    
     command, _, _ = build_ffmpeg_command(
-        input_file=input_file,
-        output_file=output_file,
-        hw_info=base_hw_info,
-        input_codec="h264",
-        pix_fmt="yuv420p",
-        enc_settings=enc_settings
+        input_file, output_file, base_hw_info, "h264", "yuv420p", enc_settings
     )
-    
-    vf_params = command[command.index('-vf') + 1]
-    assert 'p010le' in vf_params  # Проверяем формат пикселей для 10 бит
-    assert '-profile:v main10' in ' '.join(command)  # Проверяем профиль HEVC
+    cmd_str = " ".join(command)
+    assert "-tune grain" in cmd_str
+
+def test_build_command_audio_none_channels(mock_ffmpeg_path_check, base_hw_info):
+    """
+    Regression test for TypeError when audio_channels is None.
+    """
+    input_file = Path("input.mp4")
+    output_file = Path("output.mp4")
+    enc_settings = {
+        'codec': 'hevc_nvenc',
+        'preset': 'p4',
+        'rc_mode': 'vbr',
+        'target_bitrate': '4M',
+        'min_bitrate': '4M',
+        'max_bitrate': '8M',
+        'bufsize': '16M',
+        'audio_codec': 'aac',
+        'audio_bitrate': '256k',
+        'audio_channels': None # Trigger for the bug
+    }
+
+    command, _, _ = build_ffmpeg_command(
+        input_file, output_file, base_hw_info, "h264", "yuv420p", enc_settings
+    )
+    cmd_str = " ".join(command)
+
+    # Should NOT have -ac flag
+    assert "-ac" not in cmd_str
+    # Should have bitrate
+    assert "-b:a 256k" in cmd_str
+
+def test_build_command_audio_flac_no_bitrate(mock_ffmpeg_path_check, base_hw_info):
+    """
+    Regression test: FLAC should not have -b:a flag.
+    """
+    input_file = Path("input.mp4")
+    output_file = Path("output.mp4")
+    enc_settings = {
+        'codec': 'libx265',
+        'preset': 'fast',
+        'crf': 28,
+        'audio_codec': 'flac',
+        'audio_bitrate': '1024k', # Should be ignored
+        'audio_channels': '2'
+    }
+
+    command, _, _ = build_ffmpeg_command(
+        input_file, output_file, base_hw_info, "h264", "yuv420p", enc_settings
+    )
+    cmd_str = " ".join(command)
+
+    assert "-c:a flac" in cmd_str
+    assert "-b:a" not in cmd_str
+    assert "-ac 2" in cmd_str

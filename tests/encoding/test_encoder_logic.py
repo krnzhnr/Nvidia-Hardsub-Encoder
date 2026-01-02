@@ -26,6 +26,7 @@ def mock_encoder_worker(tmp_path):
         use_source_path=False,
         remove_credit_lines=False,
         audio_settings={},
+        video_settings={},
         parent_gui=MagicMock()
     )
     return worker
@@ -95,7 +96,7 @@ def test_process_next_file_exists_skip(mock_encoder_worker, mocker):
     # Verify
     assert mock_slot.call_count > 0
     args = mock_slot.call_args[0]
-    assert args[1] is True  # success flag for "processed" (skipped is considered processed in batch flow)
+    assert args[1] is True, f"Operation failed unexpectedly with message: {args[2]}"
     assert "существует" in args[2]
 
 def test_audio_settings_passed_to_command(mock_encoder_worker, mocker):

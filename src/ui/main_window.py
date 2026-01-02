@@ -7,26 +7,54 @@ from PyQt6.QtCore import (
     Qt, QThread, QCoreApplication, QUrl, pyqtSlot
 )
 from PyQt6.QtGui import (
-    QPalette, QColor, QTextCursor,
-    QDesktopServices, QDragEnterEvent, QDropEvent
+    QPalette, QColor, QTextCursor, QIcon,
+    QDesktopServices, QDragEnterEvent, QDropEvent, QPainter
 )
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QListWidget, QProgressBar, QTextEdit,
     QLabel, QFileDialog, QLineEdit, QMessageBox, QSpinBox,
     QScrollArea, QComboBox, QCheckBox, QStyleFactory,
-    QInputDialog, QGroupBox, QTabWidget
+    QInputDialog, QGroupBox, QTabWidget, QRadioButton, QStackedWidget,
+    QSystemTrayIcon, QApplication
 )
 
 from src.app_config import (
     APP_DIR, VIDEO_EXTENSIONS, DEFAULT_TARGET_V_BITRATE_MBPS,
     FFMPEG_PATH, FFPROBE_PATH, FONTS_SUBDIR, OUTPUT_SUBDIR,
-    LOSSLESS_QP_VALUE, SUBTITLE_TRACK_TITLE_KEYWORD
+    LOSSLESS_QP_VALUE, SUBTITLE_TRACK_TITLE_KEYWORD,
+    NVENC_PRESET, NVENC_RC, NVENC_TUNING, NVENC_AQ, NVENC_AQ_STRENGTH, NVENC_LOOKAHEAD,
+    CPU_PRESET, CPU_CRF, CPU_RC, APP_ICON_PATH
 )
 from src.encoding.encoder_worker import EncoderWorker
 from src.ffmpeg.core import check_executable
 from src.ffmpeg.detection import detect_nvidia_hardware
 from src.ffmpeg.info import get_video_resolution
+
+class FileListWidget(QListWidget):
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if self.count() == 0:
+            painter = QPainter(self.viewport())
+            painter.save()
+            
+            # Настройка цвета текста (используем цвет placeholder или просто серый)
+            try:
+                # PlaceholderText появился в Qt 5.12+
+                color = self.palette().color(QPalette.ColorRole.PlaceholderText)
+            except AttributeError:
+                color = QColor(128, 128, 128)
+                
+            painter.setPen(color)
+            
+            font = self.font()
+            font.setPointSize(10)
+            painter.setFont(font)
+            
+            text = "Перетащите видеофайлы сюда\nили нажмите кнопку выбора"
+            painter.drawText(self.viewport().rect(), Qt.AlignmentFlag.AlignCenter, text)
+            
+            painter.restore()
 
 
 class MainWindow(QMainWindow):
@@ -36,6 +64,15 @@ class MainWindow(QMainWindow):
             f"DUB NVIDIA HEVC Encoder GUI (APP_DIR: {APP_DIR})"
         )
         self.setGeometry(100, 100, 800, 850)
+
+        # -- System Tray for Notifications --
+        self.tray_icon = QSystemTrayIcon(self)
+        if Path(APP_ICON_PATH).exists():
+            self.tray_icon.setIcon(QIcon(str(APP_ICON_PATH)))
+        else:
+            # Fallback icon or empty
+            pass
+        self.tray_icon.show()
 
         self.setAcceptDrops(True)
 
@@ -50,6 +87,12 @@ class MainWindow(QMainWindow):
         self.current_message_box = None
 
         self.init_ui()
+        
+        # Инициализация состояния UI
+        self.toggle_encoder_settings()
+        self.toggle_nvenc_bitrate_controls()
+        self.toggle_cpu_bitrate_controls()
+
         self.check_system_components()
 
     def init_ui(self):
@@ -131,6 +174,8 @@ class MainWindow(QMainWindow):
             # Если это первая партия файлов, определяем разрешение
             if was_empty and self.files_to_process:
                 self.check_resolution_for_first_file()
+            
+            self.validate_start_capability()
         else:
             self.log_message("Файлы уже присутствуют в списке.", "warning")
 
@@ -151,6 +196,8 @@ class MainWindow(QMainWindow):
         self.chk_force_resolution.setChecked(False)
 
         self.update_overall_progress_display()
+        self.update_overall_progress_display()
+        self.validate_start_capability()
         self.log_message("Список файлов очищен.", "info")
 
     def check_resolution_for_first_file(self):
@@ -195,16 +242,18 @@ class MainWindow(QMainWindow):
         files_buttons_layout = QHBoxLayout()
 
         self.btn_select_files = QPushButton("Выбрать видеофайлы")
+        self.btn_select_files.setToolTip("Открыть диалог выбора видеофайлов для обработки.")
         self.btn_select_files.clicked.connect(self.select_files)
         files_buttons_layout.addWidget(self.btn_select_files)
 
         self.btn_clear_files = QPushButton("Очистить список")
+        self.btn_clear_files.setToolTip("Удалить все файлы из списка обработки.")
         self.btn_clear_files.clicked.connect(self.clear_file_list)
         files_buttons_layout.addWidget(self.btn_clear_files)
 
         file_selection_layout.addLayout(files_buttons_layout)
 
-        self.list_widget_files = QListWidget()
+        self.list_widget_files = FileListWidget()
         self.list_widget_files.setSelectionMode(
             QListWidget.SelectionMode.NoSelection
         )
@@ -225,6 +274,7 @@ class MainWindow(QMainWindow):
         output_dir_layout.addWidget(self.line_edit_output_dir)
 
         self.btn_select_output_dir = QPushButton("Обзор...")
+        self.btn_select_output_dir.setToolTip("Выбрать папку, куда будут сохраняться готовые файлы.")
         self.btn_select_output_dir.clicked.connect(
             self.select_output_directory
         )
@@ -242,6 +292,7 @@ class MainWindow(QMainWindow):
         layout_output.addLayout(output_dir_layout)
 
         self.chk_use_source_path = QCheckBox("Использовать исходный путь")
+        self.chk_use_source_path.setToolTip("Сохранять готовые файлы в ту же папку, где лежит исходное видео.")
         self.chk_use_source_path.stateChanged.connect(
             self.toggle_output_dir_controls
         )
@@ -258,48 +309,205 @@ class MainWindow(QMainWindow):
         tab = QWidget()
         layout = QVBoxLayout(tab)
 
-        # -- Группа: Качество видео --
-        group_box_quality = QGroupBox("Качество видео")
-        layout_quality = QVBoxLayout(group_box_quality)
-
-        self.chk_lossless_mode = QCheckBox("Lossless")
-        self.chk_lossless_mode.stateChanged.connect(
-            self.toggle_bitrate_settings_availability
+        # -- Группа: Выбор энкодера --
+        group_encoder = QGroupBox("Энкодер")
+        layout_encoder = QHBoxLayout(group_encoder)
+        
+        self.radio_gpu = QRadioButton("NVIDIA NVENC (GPU)")
+        self.radio_gpu.setChecked(True)
+        self.radio_gpu.setToolTip("Быстрое аппаратное кодирование на видеокарте NVIDIA.")
+        self.radio_gpu.toggled.connect(self.toggle_encoder_settings)
+        
+        self.radio_cpu = QRadioButton("CPU (x265)")
+        self.radio_cpu.setToolTip("Программное кодирование процессором. Медленнее, но может обеспечить лучшее сжатие.")
+        # self.radio_cpu connection handled by radio_gpu toggle
+        
+        layout_encoder.addWidget(self.radio_gpu)
+        layout_encoder.addWidget(self.radio_cpu)
+        
+        self.chk_lossless_mode = QCheckBox("Режим Lossless (Без потерь)")
+        self.chk_lossless_mode.setToolTip(
+            "Автоматически устанавливает параметры для кодирования без потерь:\n"
+            "- GPU: constqp, QP=0, Tuning=lossless\n"
+            "- CPU: CRF=0"
         )
-        layout_quality.addWidget(self.chk_lossless_mode)
+        self.chk_lossless_mode.stateChanged.connect(self.toggle_lossless_mode)
+        layout_encoder.addWidget(self.chk_lossless_mode)
 
-        self.bitrate_controls_widget = QWidget()
-        bitrate_controls_layout = QVBoxLayout(self.bitrate_controls_widget)
-        bitrate_controls_layout.setContentsMargins(0, 0, 0, 0)
+        layout_encoder.addStretch()
+        layout.addWidget(group_encoder)
 
-        lbl_bitrate = QLabel("Целевой средний битрейт (Мбит/с):")
-        bitrate_controls_layout.addWidget(lbl_bitrate)
+        # -- Динамическая область настроек энкодера --
+        self.encoder_settings_stack = QStackedWidget()
+        layout.addWidget(self.encoder_settings_stack)
 
-        self.spin_target_bitrate = QSpinBox()
-        self.spin_target_bitrate.setMinimum(1)
-        self.spin_target_bitrate.setMaximum(100)
-        self.spin_target_bitrate.setValue(DEFAULT_TARGET_V_BITRATE_MBPS)
-        self.spin_target_bitrate.valueChanged.connect(
-            self.update_derived_bitrates_display
+        # 1. Страница NVENC
+        self.page_nvenc = QWidget()
+        layout_nvenc = QVBoxLayout(self.page_nvenc)
+        layout_nvenc.setContentsMargins(0, 0, 0, 0)
+        
+        # Preset (NVENC)
+        layout_nv_preset = QHBoxLayout()
+        layout_nv_preset.addWidget(QLabel("Пресет:"))
+        self.combo_nv_preset = QComboBox()
+        self.combo_nv_preset.addItems(['p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7'])
+        self.combo_nv_preset.setCurrentText(NVENC_PRESET)
+        self.combo_nv_preset.setToolTip("p1 - самый быстрый, p7 - самое высокое качество.")
+        layout_nv_preset.addWidget(self.combo_nv_preset)
+        layout_nvenc.addLayout(layout_nv_preset)
+
+        # Rate Control (NVENC) + Bitrate
+        group_nv_rc = QGroupBox("Управление битрейтом (NVENC)")
+        layout_nv_rc = QVBoxLayout(group_nv_rc)
+        
+        layout_rc_mode = QHBoxLayout()
+        layout_rc_mode.addWidget(QLabel("Режим:"))
+        self.combo_nv_rc = QComboBox()
+        self.combo_nv_rc.addItems(['cbr', 'vbr', 'vbr_hq', 'constqp'])
+        self.combo_nv_rc.setCurrentText(NVENC_RC)
+        self.combo_nv_rc.setToolTip(
+            "Режим управления битрейтом:\n"
+            "CBR - постоянный битрейт\n"
+            "VBR/VBR_HQ - переменный битрейт (рекомендуется)\n"
+            "ConstQP - постоянный квантователь (качество)"
         )
-        bitrate_controls_layout.addWidget(self.spin_target_bitrate)
+        self.combo_nv_rc.currentTextChanged.connect(self.toggle_nvenc_bitrate_controls)
+        layout_rc_mode.addWidget(self.combo_nv_rc)
+        layout_nv_rc.addLayout(layout_rc_mode)
+        
+        # Bitrate / QP Controls for NVENC
+        self.widget_nv_bitrate = QWidget()
+        l_nv_br = QHBoxLayout(self.widget_nv_bitrate)
+        l_nv_br.setContentsMargins(0, 0, 0, 0)
+        l_nv_br.addWidget(QLabel("Битрейт (Мбит/с):"))
+        self.spin_nv_bitrate = QSpinBox()
+        self.spin_nv_bitrate.setRange(1, 100)
+        self.spin_nv_bitrate.setValue(DEFAULT_TARGET_V_BITRATE_MBPS)
+        self.spin_nv_bitrate.setToolTip("Целевой видео битрейт в Мбит/с.")
+        l_nv_br.addWidget(self.spin_nv_bitrate)
+        layout_nv_rc.addWidget(self.widget_nv_bitrate)
+        
+        self.widget_nv_qp = QWidget()
+        l_nv_qp = QHBoxLayout(self.widget_nv_qp)
+        l_nv_qp.setContentsMargins(0, 0, 0, 0)
+        l_nv_qp.addWidget(QLabel("QP (0-51):"))
+        self.spin_nv_qp = QSpinBox()
+        self.spin_nv_qp.setRange(0, 51)
+        self.spin_nv_qp.setValue(LOSSLESS_QP_VALUE) # Using 0 default for lossless context, but typical CQ is higher
+        self.spin_nv_qp.setToolTip("Значение квантователя (0 - лучшее качество/lossless, 51 - худшее).")
+        l_nv_qp.addWidget(self.spin_nv_qp)
+        layout_nv_rc.addWidget(self.widget_nv_qp)
+        
+        layout_nvenc.addWidget(group_nv_rc)
+        
+        # Tuning & Flags
+        layout_nv_advanced = QHBoxLayout()
+        layout_nv_advanced.addWidget(QLabel("Tuning:"))
+        self.combo_nv_tuning = QComboBox()
+        self.combo_nv_tuning.addItems(['hq', 'll', 'ull', 'lossless'])
+        self.combo_nv_tuning.setCurrentText(NVENC_TUNING)
+        self.combo_nv_tuning.setToolTip("Настройка энкодера (hq - высокое качество, ll - низкая задержка, lossless - без потерь).")
+        layout_nv_advanced.addWidget(self.combo_nv_tuning)
+        
+        self.widget_nv_lookahead = QWidget()
+        l_nv_lookahead = QHBoxLayout(self.widget_nv_lookahead)
+        l_nv_lookahead.setContentsMargins(0, 0, 0, 0)
+        
+        self.chk_nv_lookahead = QCheckBox("Lookahead")
+        self.chk_nv_lookahead.setChecked(True)
+        self.chk_nv_lookahead.setToolTip("Предварительный анализ кадров (rc-lookahead).")
+        
+        self.spin_nv_lookahead = QSpinBox()
+        self.spin_nv_lookahead.setRange(0, 32)
+        self.spin_nv_lookahead.setValue(int(NVENC_LOOKAHEAD))
+        self.spin_nv_lookahead.setToolTip("Количество кадров для анализа (обычно 16-32).")
+        
+        self.chk_nv_lookahead.toggled.connect(self.spin_nv_lookahead.setEnabled)
+        
+        l_nv_lookahead.addWidget(self.chk_nv_lookahead)
+        l_nv_lookahead.addWidget(self.spin_nv_lookahead)
+        l_nv_lookahead.addStretch()
+        
+        layout_nv_advanced.addWidget(self.widget_nv_lookahead)
+        
+        self.chk_nv_aq = QCheckBox("Spatial AQ")
+        self.chk_nv_aq.setChecked(True)
+        self.chk_nv_aq.setToolTip("Пространственное адаптивное квантование (улучшает качество в сложных сценах).")
+        layout_nv_advanced.addWidget(self.chk_nv_aq)
+        
+        layout_nvenc.addLayout(layout_nv_advanced)
+        
+        self.chk_force_10bit = QCheckBox("Принудительный 10-бит (Main10)")
+        self.chk_force_10bit.setToolTip("Кодировать в 10-бит (HEVC Main10), даже если исходник 8-бит. Уменьшает бандинг.")
+        layout_nvenc.addWidget(self.chk_force_10bit)
 
-        self.lbl_derived_bitrates = QLabel()
-        self.update_derived_bitrates_display()
-        bitrate_controls_layout.addWidget(self.lbl_derived_bitrates)
 
-        layout_quality.addWidget(self.bitrate_controls_widget)
+        # 2. Страница CPU (x265)
+        self.page_cpu = QWidget()
+        layout_cpu = QVBoxLayout(self.page_cpu)
+        layout_cpu.setContentsMargins(0, 0, 0, 0)
+        
+        # Preset (CPU)
+        layout_cpu_preset = QHBoxLayout()
+        layout_cpu_preset.addWidget(QLabel("Пресет:"))
+        self.combo_cpu_preset = QComboBox()
+        self.combo_cpu_preset.addItems(['ultrafast', 'superfast', 'veryfast', 'faster', 'fast', 'medium', 'slow', 'slower', 'veryslow'])
+        self.combo_cpu_preset.setCurrentText(CPU_PRESET)
+        self.combo_cpu_preset.setToolTip("Пресет скорости/качества. Slower = лучше сжатие, но медленнее.")
+        layout_cpu_preset.addWidget(self.combo_cpu_preset)
+        layout_cpu.addLayout(layout_cpu_preset)
+        
+        # Rate Control (CPU)
+        group_cpu_rc = QGroupBox("Управление качеством (CPU)")
+        layout_cpu_rc = QVBoxLayout(group_cpu_rc)
+        
+        layout_cpu_mode = QHBoxLayout()
+        self.radio_cpu_crf = QRadioButton("CRF (Качество)")
+        self.radio_cpu_crf.setToolTip("Constant Rate Factor. Качество зависит от значения CRF (меньше = лучше).")
+        self.radio_cpu_crf.toggled.connect(self.toggle_cpu_bitrate_controls)
+        
+        self.radio_cpu_bitrate = QRadioButton("Битрейт (CBR/VBR)")
+        self.radio_cpu_bitrate.setToolTip("Целевой средний битрейт.")
+        self.radio_cpu_bitrate.setChecked(True)
+        
+        layout_cpu_mode.addWidget(self.radio_cpu_crf)
+        layout_cpu_mode.addWidget(self.radio_cpu_bitrate)
+        layout_cpu_rc.addLayout(layout_cpu_mode)
+        
+        # CRF Control
+        self.widget_cpu_crf = QWidget()
+        l_cpu_crf = QHBoxLayout(self.widget_cpu_crf)
+        l_cpu_crf.setContentsMargins(0, 0, 0, 0)
+        l_cpu_crf.addWidget(QLabel("CRF (0-51, меньше=лучше):"))
+        self.spin_cpu_crf = QSpinBox()
+        self.spin_cpu_crf.setRange(0, 51)
+        self.spin_cpu_crf.setValue(CPU_CRF)
+        self.spin_cpu_crf.setToolTip("Значение CRF. 0 - lossless, 18-23 - хорошее качество, 28+ - хуже.")
+        l_cpu_crf.addWidget(self.spin_cpu_crf)
+        layout_cpu_rc.addWidget(self.widget_cpu_crf)
+        
+        # Bitrate Control
+        self.widget_cpu_bitrate = QWidget()
+        l_cpu_br = QHBoxLayout(self.widget_cpu_bitrate)
+        l_cpu_br.setContentsMargins(0, 0, 0, 0)
+        l_cpu_br.addWidget(QLabel("Битрейт (Мбит/с):"))
+        self.spin_cpu_bitrate = QSpinBox()
+        self.spin_cpu_bitrate.setRange(1, 100)
+        self.spin_cpu_bitrate.setValue(DEFAULT_TARGET_V_BITRATE_MBPS)
+        self.spin_cpu_bitrate.setToolTip("Целевой битрейт для CPU кодирования в Мбит/с.")
+        l_cpu_br.addWidget(self.spin_cpu_bitrate)
+        layout_cpu_rc.addWidget(self.widget_cpu_bitrate)
+        
+        layout_cpu.addWidget(group_cpu_rc)
+        # Add stretch to push CPU settings up
+        layout_cpu.addStretch()
 
-        self.chk_force_10bit = QCheckBox("Принудительный 10-бит (HEVC Main10)")
-        self.chk_force_10bit.setToolTip(
-            "Принудительно кодировать в 10-битном цвете.\n"
-            "Может немного увеличить размер файла и время, но улучшает качество градиентов."
-        )
-        layout_quality.addWidget(self.chk_force_10bit)
 
-        layout.addWidget(group_box_quality)
+        # Add pages to stack
+        self.encoder_settings_stack.addWidget(self.page_nvenc)
+        self.encoder_settings_stack.addWidget(self.page_cpu)
 
-        # -- Группа: Разрешение и кадрирование --
+        # -- Общие: Разрешение и кадрирование --
         group_box_geometry = QGroupBox("Разрешение и кадрирование")
         layout_geometry = QVBoxLayout(group_box_geometry)
 
@@ -308,16 +516,19 @@ class MainWindow(QMainWindow):
             "Анализирует видео для удаления черных полос.\n"
             "Может немного увеличить время обработки."
         )
+        # self.chk_auto_crop.setChecked(True) - Default is now False per user request
         layout_geometry.addWidget(self.chk_auto_crop)
 
         self.chk_force_resolution = QCheckBox("Принудительное разрешение вывода")
         self.chk_force_resolution.stateChanged.connect(
             self.toggle_resolution_options
         )
+        self.chk_force_resolution.setToolTip("Изменить разрешение выходного видео (скейлинг).")
         layout_geometry.addWidget(self.chk_force_resolution)
 
         self.combo_resolution = QComboBox()
         self.combo_resolution.setEnabled(False)
+        self.combo_resolution.setToolTip("Выберите желаемое разрешение из списка.")
         layout_geometry.addWidget(self.combo_resolution)
 
         layout.addWidget(group_box_geometry)
@@ -391,11 +602,13 @@ class MainWindow(QMainWindow):
 
         self.edit_audio_title = QLineEdit("Русский [Дубляжная]")
         self.edit_audio_title.setPlaceholderText("Название дорожки")
+        self.edit_audio_title.setToolTip("Метаданные: заголовок аудиодорожки в MKV.")
         layout_meta.addWidget(QLabel("Название:"))
         layout_meta.addWidget(self.edit_audio_title)
 
         self.edit_audio_lang = QLineEdit("rus")
         self.edit_audio_lang.setPlaceholderText("Код языка (3 буквы, ISO 639-2)")
+        self.edit_audio_lang.setToolTip("Метаданные: код языка (rus, eng, jpn и т.д.).")
         layout_meta.addWidget(QLabel("Язык (код):"))
         layout_meta.addWidget(self.edit_audio_lang)
 
@@ -475,6 +688,7 @@ class MainWindow(QMainWindow):
         # -- Кнопка Старт/Стоп --
         self.btn_start_stop = QPushButton("Начать кодирование")
         self.btn_start_stop.setFixedHeight(40)
+        self.btn_start_stop.setToolTip("Запустить процесс обработки добавленных файлов.")
         self.btn_start_stop.clicked.connect(self.toggle_encoding)
 
         # Центрируем кнопку
@@ -642,10 +856,14 @@ class MainWindow(QMainWindow):
 
         if self.hw_info is None or self.hw_info.get('encoder') is None:
             self.log_message(
-                "Не удалось подтвердить наличие NVIDIA GPU/драйвера или "
-                "поддержку NVENC в FFmpeg. Кодирование невозможно.", "error"
+                "NVIDIA GPU/драйвер не найден. Аппаратное кодирование (NVENC) "
+                "недоступно. Переключаюсь на CPU.", "warning"
             )
-            self.btn_start_stop.setEnabled(False)
+            self.radio_gpu.setEnabled(False)
+            self.radio_cpu.setChecked(True)
+            # Принудительно обновляем UI, так как сигнал toggled может не сработать, 
+            # если радио-кнопки еще не были показаны или инициализированы полностью
+            self.toggle_encoder_settings() 
         else:
             self.log_message("Проверка NVIDIA и FFmpeg завершена.", "info")
             if not self.hw_info.get('subtitles_filter'):
@@ -655,18 +873,20 @@ class MainWindow(QMainWindow):
                     f".\\{FONTS_SUBDIR} не будут использованы для субтитров.",
                     "warning"
                 )
+        
+        self.validate_start_capability()
 
-            fonts_dir_abs = (APP_DIR / FONTS_SUBDIR).resolve()
-            if fonts_dir_abs.is_dir() and list(fonts_dir_abs.glob('*')):
-                self.log_message(
-                    f"Найдена папка с пользовательскими шрифтами: {fonts_dir_abs}",
-                    "info"
-                )
-            else:
-                self.log_message(
-                    f"Папка для пользовательских шрифтов ({fonts_dir_abs}) "
-                    "не найдена или пуста.", "warning"
-                )
+        fonts_dir_abs = (APP_DIR / FONTS_SUBDIR).resolve()
+        if fonts_dir_abs.is_dir() and list(fonts_dir_abs.glob('*')):
+            self.log_message(
+                f"Найдена папка с пользовательскими шрифтами: {fonts_dir_abs}",
+                "info"
+            )
+        else:
+            self.log_message(
+                f"Папка для пользовательских шрифтов ({fonts_dir_abs}) "
+                "не найдена или пуста.", "warning"
+            )
 
     def select_files(self):
         extensions_filter = ' '.join(['*' + ext for ext in VIDEO_EXTENSIONS])
@@ -710,10 +930,11 @@ class MainWindow(QMainWindow):
                     self.chk_force_resolution.setChecked(False)
                     self.combo_resolution.setEnabled(False)
             else:
-                self.current_source_width = None
                 self.current_source_height = None
                 self.combo_resolution.clear()
                 self.combo_resolution.setEnabled(False)
+        
+            self.validate_start_capability()
 
     def update_resolution_combobox(self, source_width, source_height):
         self.combo_resolution.clear()
@@ -798,6 +1019,109 @@ class MainWindow(QMainWindow):
                         self.combo_resolution.setCurrentIndex(i)
                         break
 
+    @pyqtSlot()
+    def toggle_encoder_settings(self):
+        """Переключает видимость настроек для выбранного энкодера."""
+        if self.radio_gpu.isChecked():
+            self.encoder_settings_stack.setCurrentWidget(self.page_nvenc)
+        else:
+            self.encoder_settings_stack.setCurrentWidget(self.page_cpu)
+        
+        # Если включен режим Lossless, применяем его к текущему (новому) энкодеру
+        if hasattr(self, 'chk_lossless_mode') and self.chk_lossless_mode.isChecked():
+            self.toggle_lossless_mode(Qt.CheckState.Checked.value)
+
+        self.validate_start_capability()
+
+    @pyqtSlot()
+    def toggle_nvenc_bitrate_controls(self, text=None):
+        """Показывает/скрывает контроли битрейта/QP для NVENC."""
+        mode = self.combo_nv_rc.currentText()
+        if mode == 'constqp':
+            self.widget_nv_bitrate.hide()
+            self.widget_nv_qp.show()
+        else:
+            self.widget_nv_bitrate.show()
+            self.widget_nv_qp.hide()
+
+    @pyqtSlot()
+    def toggle_cpu_bitrate_controls(self):
+        """Показывает/скрывает контроли для CPU (CRF vs Bitrate)."""
+        if self.radio_cpu_crf.isChecked():
+            self.widget_cpu_bitrate.hide()
+            self.widget_cpu_crf.show()
+        else:
+            self.widget_cpu_bitrate.show()
+            self.widget_cpu_crf.hide()
+
+    @pyqtSlot(int)
+    def toggle_lossless_mode(self, state):
+        """Включает/отключает режим Lossless (блокирует/разблокирует настройки)."""
+        is_checked = (state == Qt.CheckState.Checked.value)
+        is_gpu = self.radio_gpu.isChecked()
+
+        if is_checked:
+            if is_gpu:
+                # Force NVENC Lossless settings
+                self.combo_nv_rc.setCurrentText('constqp')
+                self.spin_nv_qp.setValue(0)
+                self.combo_nv_tuning.setCurrentText('lossless')
+                self.combo_nv_preset.setCurrentText('p7')
+
+                # Disable conflicting controls
+                self.combo_nv_rc.setEnabled(False)
+                self.spin_nv_qp.setEnabled(False)
+                self.widget_nv_bitrate.setEnabled(False)
+                self.combo_nv_tuning.setEnabled(False)
+            else:
+                # Force CPU Lossless settings
+                self.radio_cpu_crf.setChecked(True)
+                self.spin_cpu_crf.setValue(0)
+                self.combo_cpu_preset.setCurrentText('medium') # Reset to sensible default
+
+                # Disable conflicting controls
+                self.radio_cpu_crf.setEnabled(False)
+                self.radio_cpu_bitrate.setEnabled(False)
+                self.spin_cpu_crf.setEnabled(False)
+                self.spin_cpu_bitrate.setEnabled(False)
+        else:
+            # Restore enabled state
+            if is_gpu:
+                self.combo_nv_rc.setEnabled(True)
+                self.spin_nv_qp.setEnabled(True)
+                self.widget_nv_bitrate.setEnabled(True)
+                self.combo_nv_tuning.setEnabled(True)
+            else:
+                self.radio_cpu_crf.setEnabled(True)
+                self.radio_cpu_bitrate.setEnabled(True)
+                self.spin_cpu_crf.setEnabled(True)
+                self.spin_cpu_bitrate.setEnabled(True)
+
+    def validate_start_capability(self):
+        """Проверяет, можно ли начать кодирование (зависит от энкодера и файлов)."""
+        has_files = len(self.files_to_process) > 0
+        
+        # Если GPU выбран, нужно чтобы GPU был detector
+        if self.radio_gpu.isChecked():
+            has_hardware = self.hw_info is not None and self.hw_info.get('encoder') is not None
+        else:
+            # Для CPU нам нужен только ffmpeg (проверяется отдельно)
+            # Предположим ffmpeg ok, т.к. check_system_components уже проверяет
+            has_hardware = True 
+        
+        self.btn_start_stop.setEnabled(has_files and has_hardware)
+
+    @pyqtSlot(str)
+    def toggle_audio_settings_availability(self, text):
+        """Включает/отключает настройки аудио в зависимости от кодека."""
+        if text in ['copy', 'flac']:
+             self.combo_audio_bitrate.setEnabled(False)
+             # copy -> disable channels too
+             self.combo_audio_channels.setEnabled(False if text == 'copy' else True)
+        else:
+             self.combo_audio_bitrate.setEnabled(True)
+             self.combo_audio_channels.setEnabled(True)
+
     @pyqtSlot(list, str, result='QVariant')
     def prompt_for_subtitle_selection(self, available_tracks, filename):
         dont_burn_text = "Не вшивать субтитры"
@@ -855,12 +1179,8 @@ class MainWindow(QMainWindow):
             use_source_path = self.chk_use_source_path.isChecked()
             disable_subtitles = self.chk_disable_subtitles.isChecked()
             remove_credit_lines = self.chk_remove_credit_lines.isChecked()
-            use_lossless_mode = self.chk_lossless_mode.isChecked()
-            force_10bit_output = self.chk_force_10bit.isChecked()
-
-            target_bitrate = 0
-            if not use_lossless_mode:
-                target_bitrate = self.spin_target_bitrate.value()
+            # use_lossless_mode and target_bitrate are now determined by encoder settings
+            # We will derive them for legacy EncoderWorker compatibility or just pass them as is.
 
             force_res_checked = self.chk_force_resolution.isChecked()
 
@@ -876,18 +1196,70 @@ class MainWindow(QMainWindow):
 
             auto_crop_enabled = self.chk_auto_crop.isChecked()
 
+            # Собираем настройки видео СНАЧАЛА, чтобы использовать их для логирования
+            video_settings = {}
+            if self.radio_gpu.isChecked():
+                video_settings['encoder_type'] = 'gpu'
+                video_settings['preset'] = self.combo_nv_preset.currentText()
+                video_settings['rc'] = self.combo_nv_rc.currentText()
+                video_settings['bitrate'] = self.spin_nv_bitrate.value()
+                video_settings['qp'] = self.spin_nv_qp.value()
+                video_settings['tuning'] = self.combo_nv_tuning.currentText()
+                if self.chk_nv_lookahead.isChecked():
+                    video_settings['lookahead'] = self.spin_nv_lookahead.value()
+                else:
+                    video_settings['lookahead'] = None
+                video_settings['aq'] = self.chk_nv_aq.isChecked()
+                video_settings['force_10bit'] = self.chk_force_10bit.isChecked()
+            else:
+                video_settings['encoder_type'] = 'cpu'
+                video_settings['preset'] = self.combo_cpu_preset.currentText()
+                video_settings['rc_mode'] = 'crf' if self.radio_cpu_crf.isChecked() else 'bitrate'
+                video_settings['crf'] = self.spin_cpu_crf.value()
+                video_settings['bitrate'] = self.spin_cpu_bitrate.value()
+
+            # Determine legacy flags for compatibility/logging
+            # Logic: Lossless if (NVENC and (tuning=lossless OR (rc=constqp AND qp=0))) OR (CPU and (rc=crf AND crf=0))
+            use_lossless_mode = False
+            
+            if video_settings['encoder_type'] == 'gpu':
+                 is_lossless_tuning = video_settings.get('tuning') == 'lossless'
+                 is_constqp_zero = (video_settings.get('rc') == 'constqp' and video_settings.get('qp', -1) == 0)
+                 if is_lossless_tuning or is_constqp_zero:
+                     use_lossless_mode = True
+                     
+                 target_bitrate = video_settings.get('bitrate', 0)
+            else:
+                 is_crf_zero = (video_settings.get('rc_mode') == 'crf' and video_settings.get('crf', -1) == 0)
+                 if is_crf_zero:
+                     use_lossless_mode = True
+                     
+                 if video_settings.get('rc_mode') == 'bitrate':
+                      target_bitrate = video_settings.get('bitrate', 0)
+
+            force_10bit_output = self.chk_force_10bit.isChecked() if self.radio_gpu.isChecked() else False
+            
             self.log_edit.clear()
             encoding_mode_str = []
-            if use_lossless_mode:
-                encoding_mode_str.append(f"Lossless (QP={LOSSLESS_QP_VALUE})")
+            encoding_mode_str.append(f"Encoder: {video_settings['encoder_type'].upper()}")
+            
+            if video_settings['encoder_type'] == 'gpu':
+                encoding_mode_str.append(f"Preset: {video_settings['preset']}")
+                if video_settings['rc'] == 'constqp':
+                     encoding_mode_str.append(f"QP: {video_settings['qp']}")
+                else:
+                     encoding_mode_str.append(f"Bitrate: {video_settings['bitrate']}M")
+                     encoding_mode_str.append(f"RC: {video_settings['rc']}")
             else:
-                encoding_mode_str.append(f"Битрейт {target_bitrate}M")
+                encoding_mode_str.append(f"Preset: {video_settings['preset']}")
+                if video_settings['rc_mode'] == 'crf':
+                    encoding_mode_str.append(f"CRF: {video_settings['crf']}")
+                else:
+                     encoding_mode_str.append(f"Bitrate: {video_settings['bitrate']}M")
 
             if force_10bit_output:
-                encoding_mode_str.append("10-бит (принудительно)")
-            else:
-                encoding_mode_str.append("8/10-бит (авто)")
-
+                encoding_mode_str.append("10-bit (forced)")
+            
             self.log_message(
                 f"--- Начало сессии кодирования ({', '.join(encoding_mode_str)}) ---",
                 "info"
@@ -921,7 +1293,7 @@ class MainWindow(QMainWindow):
                 'title': self.edit_audio_title.text(),
                 'language': self.edit_audio_lang.text()
             }
-
+            
             self.encoder_worker = EncoderWorker(
                 files_to_process=self.files_to_process,
                 target_bitrate_mbps=target_bitrate,
@@ -931,13 +1303,15 @@ class MainWindow(QMainWindow):
                 selected_resolution_option=selected_resolution_data,
                 use_lossless_mode=use_lossless_mode,
                 auto_crop_enabled=auto_crop_enabled,
-                force_10bit_output=force_10bit_output,
+                force_10bit_output=force_10bit_output, 
                 disable_subtitles=disable_subtitles,
                 use_source_path=use_source_path,
                 remove_credit_lines=remove_credit_lines,
                 audio_settings=audio_settings,
+                video_settings=video_settings, 
                 parent_gui=self
             )
+
             self.encoder_worker.moveToThread(self.encoder_thread)
 
             self.encoder_worker.progress.connect(
@@ -1046,10 +1420,21 @@ class MainWindow(QMainWindow):
         self.encoder_thread = None
 
         # Показываем сообщение только если работа завершилась штатно
+        # Показываем сообщение только если работа завершилась штатно
         if not was_manually_stopped:
-            QMessageBox.information(
-                self, "Завершено", "Обработка всех файлов завершена."
-            )
+            # Вместо назойливого попапа - звук и уведомление в трей
+            QApplication.beep()
+            
+            if self.tray_icon.isVisible():
+                self.tray_icon.showMessage(
+                    "Кодирование завершено",
+                    "Обработка всех файлов завершена.",
+                    QSystemTrayIcon.MessageIcon.Information,
+                    5000 # 5 секунд
+                )
+            else:
+                # Если трей не виден (не удалось инициализировать), пишем в статус бар или просто звук
+                pass
 
     def closeEvent(self, event):
         if self.encoder_thread and self.encoder_thread.isRunning():

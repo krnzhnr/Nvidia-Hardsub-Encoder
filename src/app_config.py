@@ -49,8 +49,15 @@ NVENC_AQ_STRENGTH = '15'  # 1-15 (для AQ=1)
 SUBTITLE_TRACK_TITLE_KEYWORD = "Надписи"
 FONTS_SUBDIR = "fonts"  # Относительно APP_DIR
 
+
 FFMPEG_EXE_NAME = "ffmpeg.exe"
 FFPROBE_EXE_NAME = "ffprobe.exe"
+
+# Параметры CPU (x265)
+CPU_CODEC = "libx265"
+CPU_PRESET = "medium"  # ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow
+CPU_CRF = 23  # 0-51, где 0 - lossless, 51 - worst quality
+CPU_RC = "crf"  # crf, bitrate
 
 # Пытаемся найти исполняемые файлы в системе
 FFMPEG_PATH = find_executable_in_path('ffmpeg') or (APP_DIR / FFMPEG_EXE_NAME)

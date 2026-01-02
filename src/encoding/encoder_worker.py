@@ -49,6 +49,7 @@ class EncoderWorker(QObject):
         use_source_path: bool,
         remove_credit_lines: bool,
         audio_settings: dict,
+        video_settings: dict,
         parent_gui: QObject
     ):
         super().__init__()
@@ -65,6 +66,7 @@ class EncoderWorker(QObject):
         self.use_source_path = use_source_path
         self.remove_credit_lines = remove_credit_lines
         self.audio_settings = audio_settings
+        self.video_settings = video_settings
         self.parent_gui = parent_gui
         self.selected_target_width = None
         self.selected_target_height = None
@@ -388,66 +390,74 @@ class EncoderWorker(QObject):
                         "info"
                     )
 
-            # Базовые настройки аудио из аргументов
+            # Определяем тип энкодера
+            encoder_type = self.video_settings.get('encoder_type', 'gpu')
+            
+            # Базовые настройки аудио
             a_codec = self.audio_settings.get('codec', AUDIO_CODEC)
-            a_bitrate = self.audio_settings.get('bitrate', AUDIO_BITRATE)
-            a_channels = self.audio_settings.get('channels', AUDIO_CHANNELS)
-            a_title = self.audio_settings.get('title', DEFAULT_AUDIO_TRACK_TITLE)
-            a_lang = self.audio_settings.get('language', DEFAULT_AUDIO_TRACK_LANGUAGE)
-
-            # Если пользователь выбрал "Исходные" каналы (None), 
-            # мы можем передать None или '0', но лучше просто не указывать -ac 
-            # или указать source_channels, если бы мы их знали.
-            # В build_ffmpeg_command, если channels None, флаг -ac не добавляется?
-            # Проверим src/ffmpeg/command.py (предполагаем логику).
-            # В конфиге AUDIO_CHANNELS = "2". 
             
             enc_settings = {
                 'audio_codec': a_codec,
-                'audio_bitrate': a_bitrate,
-                'audio_channels': a_channels,
-                'preset': NVENC_PRESET,
-                'tuning': NVENC_TUNING,
-                'rc_mode': NVENC_RC,
-                'lookahead': NVENC_LOOKAHEAD,
-                'spatial_aq': NVENC_AQ,
-                'aq_strength': NVENC_AQ_STRENGTH,
-                'audio_track_title': a_title,
-                'audio_track_language': a_lang,
-                'use_lossless_mode': self.use_lossless_mode,
-                'force_10bit_output': is_10bit
+                'audio_bitrate': self.audio_settings.get('bitrate', AUDIO_BITRATE),
+                'audio_channels': self.audio_settings.get('channels', AUDIO_CHANNELS),
+                'audio_track_title': self.audio_settings.get('title', DEFAULT_AUDIO_TRACK_TITLE),
+                'audio_track_language': self.audio_settings.get('language', DEFAULT_AUDIO_TRACK_LANGUAGE),
             }
 
             log_parts = []
-            if self.use_lossless_mode:
-                enc_settings['preset'] = 'lossless'
-                enc_settings['rc_mode'] = 'constqp'
-                enc_settings['qp_value'] = LOSSLESS_QP_VALUE
-                # В режиме Lossless мы форсируем copy для аудио, 
-                # ИЛИ можем разрешить пользователю менять? 
-                # Обычно Lossless подразумевает сохранение качества, но пользователь мог хотеть конвертировать.
-                # ТЕКУЩАЯ логика была: enc_settings['audio_codec'] = 'copy'
-                # Но теперь у нас есть явные настройки. 
-                # Если пользователь выбрал COPY в GUI - отлично. 
-                # Если выбрал AAC - значит хочет AAC.
-                # ОСТАВИМ ПРИОРИТЕТ GUI, но если пользователь ничего не трогал (у нас нет "default" флага), 
-                # то будет то что выбрано.
-                # Однако старая логика форсировала copy. 
-                # Давайте сделаем так: если Lossless - мы НЕ меняем то, что выбрал пользователь.
-                # Но если пользователь выбрал AAC, он кодирует аудио с потерями в видео без потерь.
-                pass 
+            
+            if encoder_type == 'cpu':
+                # --- CPU (x265) Settings ---
+                enc_settings['codec'] = 'libx265'
+                enc_settings['preset'] = self.video_settings.get('preset', 'medium')
                 
-                log_parts.append(f"Lossless (QP: {enc_settings['qp_value']})")
-                log_parts.append(f"Аудио: {enc_settings['audio_codec']}")
+                rc_mode = self.video_settings.get('rc_mode', 'crf')
+                if rc_mode == 'crf':
+                    crf = self.video_settings.get('crf', 23)
+                    enc_settings['crf'] = crf
+                    # libx265 не использует флаги bitrates для crf
+                    log_parts.append(f"CPU x265 (Preset: {enc_settings['preset']}, CRF: {crf})")
+                else:
+                    bitrate_mbps = self.video_settings.get('bitrate', 4)
+                    enc_settings['bitrate'] = f"{bitrate_mbps}M"
+                    log_parts.append(f"CPU x265 (Preset: {enc_settings['preset']}, Bitrate: {enc_settings['bitrate']})")
+                    
             else:
-                target_br_str = f"{self.target_bitrate_mbps}M"
-                max_br_str = f"{self.target_bitrate_mbps * 2}M"
-                buf_size_str = f"{self.target_bitrate_mbps * 4}M"
-                enc_settings['target_bitrate'] = target_br_str
-                enc_settings['min_bitrate'] = target_br_str
-                enc_settings['max_bitrate'] = max_br_str
-                enc_settings['bufsize'] = buf_size_str
-                log_parts.append(f"Битрейт (Целевой={target_br_str})")
+                # --- GPU (NVENC) Settings ---
+                enc_settings['codec'] = 'hevc_nvenc'
+                enc_settings['preset'] = self.video_settings.get('preset', NVENC_PRESET)
+                enc_settings['tuning'] = self.video_settings.get('tuning', NVENC_TUNING)
+                enc_settings['rc_mode'] = self.video_settings.get('rc', NVENC_RC)
+                lookahead_val = self.video_settings.get('lookahead')
+                if lookahead_val is True:
+                    enc_settings['lookahead'] = '32'
+                elif lookahead_val is not None:
+                    enc_settings['lookahead'] = str(lookahead_val)
+                else:
+                    enc_settings['lookahead'] = None
+                enc_settings['spatial_aq'] = '1' if self.video_settings.get('aq', True) else '0'
+                enc_settings['aq_strength'] = NVENC_AQ_STRENGTH
+                enc_settings['force_10bit_output'] = self.video_settings.get('force_10bit', False) or is_10bit
+                
+                # Bitrate logic for NVENC
+                if enc_settings['rc_mode'] == 'constqp':
+                     qp = self.video_settings.get('qp', LOSSLESS_QP_VALUE)
+                     enc_settings['qp_value'] = qp
+                     log_parts.append(f"NVENC (Preset: {enc_settings['preset']}, QP: {qp})")
+                else:
+                    bitrate_mbps = self.video_settings.get('bitrate', 4)
+                    target_br_str = f"{bitrate_mbps}M"
+                    max_br_str = f"{bitrate_mbps * 2}M"
+                    buf_size_str = f"{bitrate_mbps * 4}M"
+                    
+                    enc_settings['target_bitrate'] = target_br_str
+                    enc_settings['min_bitrate'] = target_br_str
+                    enc_settings['max_bitrate'] = max_br_str
+                    enc_settings['bufsize'] = buf_size_str
+                    
+                    log_parts.append(f"NVENC (Preset: {enc_settings['preset']}, Bitrate: {target_br_str})")
+
+            log_parts.append(f"Аудио: {enc_settings['audio_codec']}")
 
             log_parts.append("10-бит" if is_10bit else "8-бит")
             self._log(f"  Режим кодирования: {', '.join(log_parts)}", "info")

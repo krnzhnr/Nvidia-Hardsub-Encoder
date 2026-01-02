@@ -113,54 +113,77 @@ def build_ffmpeg_command(
         command.extend(['-vf', ",".join(vf_items)])
 
     # Параметры видео энкодера
+    # Определяем кодек: берем из настроек или фолбек на hw_info (NVENC)
+    video_codec = enc_settings.get('codec', hw_info.get('encoder', 'libx265'))
+
     encoder_opts = [
-        '-c:v', hw_info['encoder'],
+        '-c:v', video_codec,
         '-preset', enc_settings['preset'],
-        '-tune', enc_settings['tuning'],
-        '-profile:v', output_profile_for_encoder,
     ]
 
-    if enc_settings.get('rc_mode') == 'constqp' and 'qp_value' in enc_settings:
-        encoder_opts.extend([
-            '-rc', 'constqp',
-            '-qp', str(enc_settings['qp_value'])
-        ])
-    elif 'target_bitrate' in enc_settings:
-        encoder_opts.extend([
-            '-rc', enc_settings['rc_mode'],
-            '-b:v', enc_settings['target_bitrate'],
-            '-minrate', enc_settings['min_bitrate'],
-            '-maxrate', enc_settings['max_bitrate'],
-            '-bufsize', enc_settings['bufsize']
-        ])
+    # Tuning (обычно для NVENC, но x265 тоже поддерживает, если передать)
+    if 'tuning' in enc_settings and enc_settings['tuning']:
+        encoder_opts.extend(['-tune', enc_settings['tuning']])
 
-        is_lossless = enc_settings.get('preset') == 'lossless'
-        is_constqp = enc_settings.get('rc_mode') == 'constqp'
+    # Profile
+    encoder_opts.extend(['-profile:v', output_profile_for_encoder])
 
-        if not (is_lossless or is_constqp):
-            if 'lookahead' in enc_settings:
-                encoder_opts.extend(['-rc-lookahead', enc_settings['lookahead']])
-            if 'spatial_aq' in enc_settings:
-                encoder_opts.extend(['-spatial-aq', enc_settings['spatial_aq']])
-                if (enc_settings['spatial_aq'] == '1' and
-                        'aq_strength' in enc_settings):
-                    encoder_opts.extend([
-                        '-aq-strength', enc_settings['aq_strength']
-                    ])
+    # --- Логика параметров для разных энкодеров ---
+    if video_codec == 'libx265':
+        # CPU x265
+        if 'crf' in enc_settings:
+            encoder_opts.extend(['-crf', str(enc_settings['crf'])])
+        elif 'bitrate' in enc_settings:
+            encoder_opts.extend(['-b:v', enc_settings['bitrate']])
+        
+        # Для x265 profile main10 требует pix_fmt yuv420p10le, который мы задали ранее
+    else:
+        # GPU NVENC
+        if enc_settings.get('rc_mode') == 'constqp' and 'qp_value' in enc_settings:
+            encoder_opts.extend([
+                '-rc', 'constqp',
+                '-qp', str(enc_settings['qp_value'])
+            ])
+        elif 'target_bitrate' in enc_settings:
+            encoder_opts.extend([
+                '-rc', enc_settings['rc_mode'],
+                '-b:v', enc_settings['target_bitrate'],
+                '-minrate', enc_settings['min_bitrate'],
+                '-maxrate', enc_settings['max_bitrate'],
+                '-bufsize', enc_settings['bufsize']
+            ])
 
-    encoder_opts.extend(['-multipass', '2', '-2pass', '1'])
+            is_lossless = enc_settings.get('preset') == 'lossless'
+            is_constqp = enc_settings.get('rc_mode') == 'constqp'
+
+            if not (is_lossless or is_constqp):
+                if enc_settings.get('lookahead'):
+                    encoder_opts.extend(['-rc-lookahead', enc_settings['lookahead']])
+                if 'spatial_aq' in enc_settings:
+                    encoder_opts.extend(['-spatial-aq', enc_settings['spatial_aq']])
+                    if (enc_settings['spatial_aq'] == '1' and
+                            'aq_strength' in enc_settings):
+                        encoder_opts.extend([
+                            '-aq-strength', enc_settings['aq_strength']
+                        ])
+
+        encoder_opts.extend(['-multipass', '2', '-2pass', '1'])
 
     command.extend(encoder_opts)
-    encoder_display_name = hw_info['encoder']
+    # Исправляем отображаемое имя (hw_info может быть неактуален для CPU)
+    encoder_display_name = video_codec
 
     # Параметры аудио кодека
     command.extend(['-c:a', enc_settings['audio_codec']])
 
     if enc_settings['audio_codec'] != 'copy':
-        command.extend([
-            '-b:a', enc_settings['audio_bitrate'],
-            '-ac', enc_settings['audio_channels']
-        ])
+        # Для FLAC битрейт задавать не нужно/нельзя, для остальных задаем если есть
+        if enc_settings['audio_codec'] != 'flac' and enc_settings.get('audio_bitrate'):
+            command.extend(['-b:a', str(enc_settings['audio_bitrate'])])
+        
+        # Каналы задаем только если они явно выбраны (не None)
+        if enc_settings.get('audio_channels'):
+            command.extend(['-ac', str(enc_settings['audio_channels'])])
 
     command.extend(['-map', '0:v:0', '-map', '0:a:0?'])
 

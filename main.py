@@ -14,7 +14,7 @@ if __name__ == '__main__':
     # (для иконки на панели задач и т.д.)
     if sys.platform == "win32":
         import ctypes
-        myappid = u'mycompany.myproduct.subproduct.version' # произвольная строка
+        myappid = u'Hardsub Encoder' # произвольная строка
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
 
     app = QApplication(sys.argv)

@@ -49,6 +49,7 @@ def encoder_worker(tmp_path, mock_hw_info):
             'title': 'Test Title',
             'language': 'eng'
         },
+        video_settings={},
         parent_gui=MockMainWindow()
     )
 

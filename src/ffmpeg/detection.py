@@ -45,8 +45,12 @@ def detect_nvidia_hardware() -> tuple[dict | None, str]:
     Возвращает словарь с информацией или None, и строку с сообщениями.
     """
     gpu_ok, gpu_msg = verify_nvidia_gpu_presence()
+    messages = [gpu_msg]
+    # Не прерываем выполнение, если nvidia-smi не найден. 
+    # FFmpeg (hevc_nvenc) может работать и без nvidia-smi в PATH.
     if not gpu_ok:
-        return None, gpu_msg
+        # Просто помечаем как warning в сообщениях, но идем дальше проверять ffmpeg
+        pass
 
     hw_info = {
         'type': None,
@@ -54,11 +58,12 @@ def detect_nvidia_hardware() -> tuple[dict | None, str]:
         'encoder': None,
         'subtitles_filter': False
     }
-    messages = [gpu_msg]
+    # messages уже инициализирован выше
 
     ffmpeg_ok, ffmpeg_msg = check_executable("ffmpeg", FFMPEG_PATH)
-    messages.append(ffmpeg_msg)
+    # messages.append(ffmpeg_msg)  <-- Убрали дублирующее сообщение об успехе
     if not ffmpeg_ok:
+        messages.append(ffmpeg_msg)
         return None, "\n".join(messages)
 
     try:
@@ -156,10 +161,23 @@ def detect_nvidia_hardware() -> tuple[dict | None, str]:
             return None, "\n".join(messages)
 
     except subprocess.CalledProcessError as e:
-        if e.stderr and e.stderr.strip():
-            error_message = e.stderr.strip().split('\n')[-1]
+        error_message = ""
+        stderr_val = e.stderr
+        if stderr_val:
+            # Если stderr в байтах (на всякий случай), декодируем
+            if isinstance(stderr_val, bytes):
+                try:
+                    stderr_val = stderr_val.decode('utf-8', errors='ignore')
+                except Exception:
+                    stderr_val = str(stderr_val)
+                    
+            if stderr_val.strip():
+                error_message = stderr_val.strip().split('\n')[-1]
+            else:
+                 error_message = str(e)
         else:
             error_message = str(e)
+
         messages.append(
             f"Ошибка проверки компонентов FFmpeg ({e.cmd[0]}): {error_message}"
         )
