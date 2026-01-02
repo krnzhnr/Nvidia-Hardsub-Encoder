@@ -179,3 +179,13 @@ def video_with_subtitles(temp_dir):
         pytest.skip("FFmpeg не найден или произошла ошибка при создании тестового видео с субтитрами")
     
     return video_path
+
+@pytest.fixture
+def main_window(qtbot, mock_nvidia_hardware, mock_ffmpeg_paths):
+    from src.ui.main_window import MainWindow
+    window = MainWindow()
+    qtbot.addWidget(window)
+    # Инициализируем начальные значения
+    window.progress_bar_current_file.setValue(0)
+    window.progress_bar_overall.setValue(0)
+    return window

@@ -3,14 +3,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QMessageBox, QApplication
 from src.ui.main_window import MainWindow
 
-@pytest.fixture
-def main_window(qtbot, mock_nvidia_hardware, mock_ffmpeg_paths):
-    window = MainWindow()
-    qtbot.addWidget(window)
-    # Инициализируем начальные значения
-    window.progress_bar_current_file.setValue(0)
-    window.progress_bar_overall.setValue(0)
-    return window
+
 
 def test_window_initial_state(main_window, qapp):
     """Проверка начального состояния окна"""
@@ -104,3 +97,35 @@ def test_resolution_combobox_updates(main_window, qapp):
             resolution_found = True
             break
     assert resolution_found, "Разрешение 1920x1080 не найдено в списке"
+
+def test_audio_controls_existence(main_window, qapp):
+    """Проверка наличия элементов управления аудио"""
+    # Проверяем наличие комбобоксов
+    assert main_window.combo_audio_codec.count() > 0
+    assert main_window.combo_audio_bitrate.count() > 0
+    assert main_window.combo_audio_channels.count() > 0
+    
+    # Проверяем дефолтные значения
+    assert main_window.edit_audio_title.text() == "Русский [Дубляжная]"
+    assert main_window.edit_audio_lang.text() == "rus"
+    assert main_window.combo_audio_bitrate.currentText() == "256k"
+
+def test_audio_settings_toggle(main_window, qtbot):
+    """Проверка переключения доступности настроек аудио"""
+    # 1. Выбираем 'copy'
+    main_window.combo_audio_codec.setCurrentText('copy')
+    qtbot.wait(100)
+    assert not main_window.combo_audio_bitrate.isEnabled()
+    assert not main_window.combo_audio_channels.isEnabled()
+    
+    # 2. Выбираем 'flac'
+    main_window.combo_audio_codec.setCurrentText('flac')
+    qtbot.wait(100)
+    assert not main_window.combo_audio_bitrate.isEnabled()
+    assert main_window.combo_audio_channels.isEnabled()
+    
+    # 3. Выбираем 'aac'
+    main_window.combo_audio_codec.setCurrentText('aac')
+    qtbot.wait(100)
+    assert main_window.combo_audio_bitrate.isEnabled()
+    assert main_window.combo_audio_channels.isEnabled()

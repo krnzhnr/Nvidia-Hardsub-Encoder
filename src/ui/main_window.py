@@ -86,9 +86,12 @@ class MainWindow(QMainWindow):
     def dragEnterEvent(self, event: QDragEnterEvent):
         """Обработка события перетаскивания файлов в окно."""
         if event.mimeData().hasUrls():
-            event.accept()
-        else:
-            event.ignore()
+            # Проверяем, есть ли хотя бы один подходящий файл
+            for url in event.mimeData().urls():
+                if url.toLocalFile().lower().endswith(VIDEO_EXTENSIONS):
+                    event.accept()
+                    return
+        event.ignore()
 
     def dropEvent(self, event: QDropEvent):
         """Обработка события сброса файлов."""
@@ -100,6 +103,7 @@ class MainWindow(QMainWindow):
 
         if files:
             self.add_files_to_list(files)
+            event.accept()
         else:
             self.log_message(
                 "Перетащенные файлы не являются поддерживаемыми видеофайлами.",
@@ -326,18 +330,91 @@ class MainWindow(QMainWindow):
         tab = QWidget()
         layout = QVBoxLayout(tab)
 
-        group_box_audio = QGroupBox("Настройки аудио")
-        layout_audio = QVBoxLayout(group_box_audio)
+        # -- Группа: Кодек и Битрейт --
+        group_fmt = QGroupBox("Формат аудио")
+        layout_fmt = QVBoxLayout(group_fmt)
 
-        lbl_placeholder = QLabel(
-            "Настройки аудиодорожки будут добавлены в будущих версиях."
+        # Кодек
+        layout_codec = QHBoxLayout()
+        lbl_codec = QLabel("Кодек:")
+        self.combo_audio_codec = QComboBox()
+        self.combo_audio_codec.addItems(
+            ['aac', 'ac3', 'libopus', 'mp3', 'flac', 'copy']
         )
-        lbl_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout_audio.addWidget(lbl_placeholder)
+        self.combo_audio_codec.setToolTip(
+            "Выберите аудиокодек. 'copy' оставит аудио без изменений."
+        )
+        self.combo_audio_codec.currentTextChanged.connect(
+            self.toggle_audio_settings_availability
+        )
+        layout_codec.addWidget(lbl_codec)
+        layout_codec.addWidget(self.combo_audio_codec)
+        layout_fmt.addLayout(layout_codec)
 
-        layout.addWidget(group_box_audio)
+        # Битрейт
+        layout_bitrate = QHBoxLayout()
+        lbl_bitrate = QLabel("Битрейт:")
+        self.combo_audio_bitrate = QComboBox()
+        self.combo_audio_bitrate.addItems(
+            ['96k', '128k', '192k', '256k', '320k']
+        )
+        self.combo_audio_bitrate.setCurrentText("256k")
+        self.combo_audio_bitrate.setEditable(True)  # Позволить ручной ввод
+        self.combo_audio_bitrate.setToolTip(
+            "Выберите или введите битрейт (например, 192k). "
+            "Игнорируется для copy и flac."
+        )
+        layout_bitrate.addWidget(lbl_bitrate)
+        layout_bitrate.addWidget(self.combo_audio_bitrate)
+        layout_fmt.addLayout(layout_bitrate)
+
+        # Каналы
+        layout_channels = QHBoxLayout()
+        lbl_channels = QLabel("Каналы:")
+        self.combo_audio_channels = QComboBox()
+        # Data: None = Original, '1' = Mono, '2' = Stereo
+        self.combo_audio_channels.addItem("Стерео (2)", '2')
+        self.combo_audio_channels.addItem("Моно (1)", '1')
+        self.combo_audio_channels.addItem("Исходные (Как в оригинале)", None)
+        self.combo_audio_channels.setToolTip(
+            "Количество каналов. Игнорируется для copy."
+        )
+        layout_channels.addWidget(lbl_channels)
+        layout_channels.addWidget(self.combo_audio_channels)
+        layout_fmt.addLayout(layout_channels)
+
+        layout.addWidget(group_fmt)
+
+        # -- Группа: Метаданные --
+        group_meta = QGroupBox("Метаданные трека")
+        layout_meta = QVBoxLayout(group_meta)
+
+        self.edit_audio_title = QLineEdit("Русский [Дубляжная]")
+        self.edit_audio_title.setPlaceholderText("Название дорожки")
+        layout_meta.addWidget(QLabel("Название:"))
+        layout_meta.addWidget(self.edit_audio_title)
+
+        self.edit_audio_lang = QLineEdit("rus")
+        self.edit_audio_lang.setPlaceholderText("Код языка (3 буквы, ISO 639-2)")
+        layout_meta.addWidget(QLabel("Язык (код):"))
+        layout_meta.addWidget(self.edit_audio_lang)
+
+        layout.addWidget(group_meta)
         layout.addStretch()
         self.tabs.addTab(tab, "Аудио")
+
+    def toggle_audio_settings_availability(self, codec_text):
+        """
+        Блокирует/разблокирует настройки аудио в зависимости от кодека.
+        """
+        is_copy = (codec_text == 'copy')
+        is_flac = (codec_text == 'flac')
+
+        # Битрейт не нужен для copy (без перекодирования) и flac (lossless)
+        self.combo_audio_bitrate.setEnabled(not (is_copy or is_flac))
+        
+        # Каналы не меняем при copy
+        self.combo_audio_channels.setEnabled(not is_copy)
 
     def _create_subtitles_tab(self):
         """Создает вкладку 4: Настройки субтитров"""
@@ -836,6 +913,15 @@ class MainWindow(QMainWindow):
             self.update_overall_progress_display()
 
             self.encoder_thread = QThread()
+            # Сбор настроек аудио
+            audio_settings = {
+                'codec': self.combo_audio_codec.currentText(),
+                'bitrate': self.combo_audio_bitrate.currentText(),
+                'channels': self.combo_audio_channels.currentData(),
+                'title': self.edit_audio_title.text(),
+                'language': self.edit_audio_lang.text()
+            }
+
             self.encoder_worker = EncoderWorker(
                 files_to_process=self.files_to_process,
                 target_bitrate_mbps=target_bitrate,
@@ -849,6 +935,7 @@ class MainWindow(QMainWindow):
                 disable_subtitles=disable_subtitles,
                 use_source_path=use_source_path,
                 remove_credit_lines=remove_credit_lines,
+                audio_settings=audio_settings,
                 parent_gui=self
             )
             self.encoder_worker.moveToThread(self.encoder_thread)

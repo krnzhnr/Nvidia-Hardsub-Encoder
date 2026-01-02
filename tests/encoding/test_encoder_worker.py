@@ -42,6 +42,13 @@ def encoder_worker(tmp_path, mock_hw_info):
         disable_subtitles=False,
         use_source_path=False,
         remove_credit_lines=False,
+        audio_settings={
+            'codec': 'aac',
+            'bitrate': '192k',
+            'channels': '2',
+            'title': 'Test Title',
+            'language': 'eng'
+        },
         parent_gui=MockMainWindow()
     )
 
@@ -53,6 +60,8 @@ def test_encoder_initialization(encoder_worker):
     assert encoder_worker.force_10bit_output == False
     assert encoder_worker.auto_crop_enabled == False
     assert encoder_worker.disable_subtitles == False
+    assert encoder_worker.audio_settings['codec'] == 'aac'
+    assert encoder_worker.audio_settings['bitrate'] == '192k'
 
 def test_encoder_stop(encoder_worker):
     """Проверяем корректность остановки кодирования"""

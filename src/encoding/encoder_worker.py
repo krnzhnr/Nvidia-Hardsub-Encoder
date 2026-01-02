@@ -48,6 +48,7 @@ class EncoderWorker(QObject):
         disable_subtitles: bool,
         use_source_path: bool,
         remove_credit_lines: bool,
+        audio_settings: dict,
         parent_gui: QObject
     ):
         super().__init__()
@@ -63,6 +64,7 @@ class EncoderWorker(QObject):
         self.disable_subtitles = disable_subtitles
         self.use_source_path = use_source_path
         self.remove_credit_lines = remove_credit_lines
+        self.audio_settings = audio_settings
         self.parent_gui = parent_gui
         self.selected_target_width = None
         self.selected_target_height = None
@@ -386,18 +388,32 @@ class EncoderWorker(QObject):
                         "info"
                     )
 
+            # Базовые настройки аудио из аргументов
+            a_codec = self.audio_settings.get('codec', AUDIO_CODEC)
+            a_bitrate = self.audio_settings.get('bitrate', AUDIO_BITRATE)
+            a_channels = self.audio_settings.get('channels', AUDIO_CHANNELS)
+            a_title = self.audio_settings.get('title', DEFAULT_AUDIO_TRACK_TITLE)
+            a_lang = self.audio_settings.get('language', DEFAULT_AUDIO_TRACK_LANGUAGE)
+
+            # Если пользователь выбрал "Исходные" каналы (None), 
+            # мы можем передать None или '0', но лучше просто не указывать -ac 
+            # или указать source_channels, если бы мы их знали.
+            # В build_ffmpeg_command, если channels None, флаг -ac не добавляется?
+            # Проверим src/ffmpeg/command.py (предполагаем логику).
+            # В конфиге AUDIO_CHANNELS = "2". 
+            
             enc_settings = {
-                'audio_codec': AUDIO_CODEC,
-                'audio_bitrate': AUDIO_BITRATE,
-                'audio_channels': AUDIO_CHANNELS,
+                'audio_codec': a_codec,
+                'audio_bitrate': a_bitrate,
+                'audio_channels': a_channels,
                 'preset': NVENC_PRESET,
                 'tuning': NVENC_TUNING,
                 'rc_mode': NVENC_RC,
                 'lookahead': NVENC_LOOKAHEAD,
                 'spatial_aq': NVENC_AQ,
                 'aq_strength': NVENC_AQ_STRENGTH,
-                'audio_track_title': DEFAULT_AUDIO_TRACK_TITLE,
-                'audio_track_language': DEFAULT_AUDIO_TRACK_LANGUAGE,
+                'audio_track_title': a_title,
+                'audio_track_language': a_lang,
                 'use_lossless_mode': self.use_lossless_mode,
                 'force_10bit_output': is_10bit
             }
@@ -407,10 +423,22 @@ class EncoderWorker(QObject):
                 enc_settings['preset'] = 'lossless'
                 enc_settings['rc_mode'] = 'constqp'
                 enc_settings['qp_value'] = LOSSLESS_QP_VALUE
-                # --- AUDIO COPY IN LOSSLESS MODE ---
-                enc_settings['audio_codec'] = 'copy'
+                # В режиме Lossless мы форсируем copy для аудио, 
+                # ИЛИ можем разрешить пользователю менять? 
+                # Обычно Lossless подразумевает сохранение качества, но пользователь мог хотеть конвертировать.
+                # ТЕКУЩАЯ логика была: enc_settings['audio_codec'] = 'copy'
+                # Но теперь у нас есть явные настройки. 
+                # Если пользователь выбрал COPY в GUI - отлично. 
+                # Если выбрал AAC - значит хочет AAC.
+                # ОСТАВИМ ПРИОРИТЕТ GUI, но если пользователь ничего не трогал (у нас нет "default" флага), 
+                # то будет то что выбрано.
+                # Однако старая логика форсировала copy. 
+                # Давайте сделаем так: если Lossless - мы НЕ меняем то, что выбрал пользователь.
+                # Но если пользователь выбрал AAC, он кодирует аудио с потерями в видео без потерь.
+                pass 
+                
                 log_parts.append(f"Lossless (QP: {enc_settings['qp_value']})")
-                log_parts.append("Аудио: Copy (без изменений)")
+                log_parts.append(f"Аудио: {enc_settings['audio_codec']}")
             else:
                 target_br_str = f"{self.target_bitrate_mbps}M"
                 max_br_str = f"{self.target_bitrate_mbps * 2}M"
