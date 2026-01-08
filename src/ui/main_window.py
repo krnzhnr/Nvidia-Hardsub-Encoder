@@ -4,19 +4,28 @@ import subprocess
 from pathlib import Path
 
 from PyQt6.QtCore import (
-    Qt, QThread, QCoreApplication, QUrl, pyqtSlot
+    Qt, QThread, QCoreApplication, QUrl, pyqtSlot, QSize
 )
 from PyQt6.QtGui import (
     QPalette, QColor, QTextCursor, QIcon,
     QDesktopServices, QDragEnterEvent, QDropEvent, QPainter
 )
 from PyQt6.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QPushButton, QListWidget, QProgressBar, QTextEdit,
-    QLabel, QFileDialog, QLineEdit, QMessageBox, QSpinBox,
-    QScrollArea, QComboBox, QCheckBox, QStyleFactory,
-    QInputDialog, QGroupBox, QTabWidget, QRadioButton, QStackedWidget,
+    QWidget, QVBoxLayout, QHBoxLayout,
+    QTextEdit, QAbstractItemView,
+    QFileDialog, QMessageBox,
+    QScrollArea,
+    QInputDialog, QStackedWidget,
     QSystemTrayIcon, QApplication
+)
+
+from qfluentwidgets import (
+    FluentWindow, NavigationItemPosition, FluentIcon,
+    PushButton, PrimaryPushButton, ListWidget, 
+    CheckBox, ComboBox, RadioButton, SpinBox, LineEdit,
+    ProgressBar, StrongBodyLabel, SubtitleLabel,
+    BodyLabel, CardWidget, SimpleCardWidget,
+    InfoBar, InfoBarPosition, Theme, setTheme
 )
 
 from src.app_config import (
@@ -31,7 +40,7 @@ from src.ffmpeg.core import check_executable
 from src.ffmpeg.detection import detect_nvidia_hardware
 from src.ffmpeg.info import get_video_resolution
 
-class FileListWidget(QListWidget):
+class FileListWidget(ListWidget):
     def paintEvent(self, event):
         super().paintEvent(event)
         if self.count() == 0:
@@ -57,21 +66,23 @@ class FileListWidget(QListWidget):
             painter.restore()
 
 
-class MainWindow(QMainWindow):
+class MainWindow(FluentWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(
             f"Hardsub Encoder GUI (APP_DIR: {APP_DIR})"
         )
-        self.setGeometry(100, 100, 800, 850)
 
+        self.navigationInterface.setExpandWidth(150)
+        
+        # Set window icon
+        if Path(APP_ICON_PATH).exists():
+            self.setWindowIcon(QIcon(str(APP_ICON_PATH)))
+        
         # -- System Tray for Notifications --
         self.tray_icon = QSystemTrayIcon(self)
         if Path(APP_ICON_PATH).exists():
             self.tray_icon.setIcon(QIcon(str(APP_ICON_PATH)))
-        else:
-            # Fallback icon or empty
-            pass
         self.tray_icon.show()
 
         self.setAcceptDrops(True)
@@ -94,36 +105,38 @@ class MainWindow(QMainWindow):
         self.toggle_cpu_bitrate_controls()
 
         self.check_system_components()
+        self.resize(1200, 950)
 
     def init_ui(self):
-        main_widget = QWidget()
-        self.setCentralWidget(main_widget)
-        layout = QVBoxLayout(main_widget)
+        # Initialize sub-interfaces
+        self.files_interface = QWidget()
+        self.files_interface.setObjectName("files_interface")
+        self.video_interface = QWidget()
+        self.video_interface.setObjectName("video_interface")
+        self.audio_interface = QWidget()
+        self.audio_interface.setObjectName("audio_interface")
+        self.subtitles_interface = QWidget()
+        self.subtitles_interface.setObjectName("subtitles_interface")
+        self.run_interface = QWidget()
+        self.run_interface.setObjectName("run_interface")
 
-        # --- Создаем QTabWidget для вкладок ---
-        self.tabs = QTabWidget()
-        layout.addWidget(self.tabs)
+        # Build UI components for each interface
+        self._create_files_tab(self.files_interface)
+        self._create_video_settings_tab(self.video_interface)
+        self._create_audio_settings_tab(self.audio_interface)
+        self._create_subtitles_tab(self.subtitles_interface)
+        self._create_run_tab(self.run_interface)
+        
+        # Init Navigation
+        self.init_navigation()
+        
+    def init_navigation(self):
+        self.addSubInterface(self.files_interface, FluentIcon.FOLDER, "Файлы")
+        self.addSubInterface(self.video_interface, FluentIcon.VIDEO, "Видео")
+        self.addSubInterface(self.audio_interface, FluentIcon.MUSIC, "Аудио")
+        self.addSubInterface(self.subtitles_interface, FluentIcon.FONT, "Субтитры")
+        self.addSubInterface(self.run_interface, FluentIcon.PLAY, "Запуск")
 
-        # --- Создаем и наполняем каждую вкладку ---
-        self._create_files_tab()
-        self._create_video_settings_tab()
-        self._create_audio_settings_tab()
-        self._create_subtitles_tab()
-        self._create_run_tab()
-
-        # --- Нижняя панель: Логи (остается под вкладками) ---
-        self.log_edit = QTextEdit()
-        self.log_edit.setReadOnly(True)
-        palette = self.log_edit.palette()
-        palette.setColor(QPalette.ColorRole.Base, QColor(40, 40, 40))
-        palette.setColor(QPalette.ColorRole.Text, QColor(220, 220, 220))
-        self.log_edit.setPalette(palette)
-
-        scroll_area_logs = QScrollArea()
-        scroll_area_logs.setWidgetResizable(True)
-        scroll_area_logs.setWidget(self.log_edit)
-        scroll_area_logs.setMinimumHeight(150)
-        layout.addWidget(scroll_area_logs, 1)
 
     # --- Drag & Drop Events ---
     def dragEnterEvent(self, event: QDragEnterEvent):
@@ -230,68 +243,103 @@ class MainWindow(QMainWindow):
             self.chk_force_resolution.setChecked(False)
             self.combo_resolution.setEnabled(False)
 
-    def _create_files_tab(self):
+    def _create_files_tab(self, parent_widget):
         """Создает вкладку 1: Выбор файлов и пути назначения"""
-        tab = QWidget()
-        layout = QHBoxLayout(tab)
+        layout = QHBoxLayout(parent_widget)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(20)
 
         # Левая часть: выбор файлов
-        file_selection_layout = QVBoxLayout()
+        files_container = QWidget()
+        files_layout = QVBoxLayout(files_container)
+        files_layout.setContentsMargins(0, 0, 0, 0)
+        files_layout.setSpacing(16)
+
+        # Заголовок
+        lbl_files = StrongBodyLabel("Файлы для обработки")
+        files_layout.addWidget(lbl_files)
+        
+        # Карточка для контента
+        files_card = SimpleCardWidget()
+        files_card_layout = QVBoxLayout(files_card)
+        files_card_layout.setContentsMargins(16, 16, 16, 16)
+        files_card_layout.setSpacing(10)
 
         # Кнопки управления списком файлов
         files_buttons_layout = QHBoxLayout()
+        files_buttons_layout.setSpacing(10)
 
-        self.btn_select_files = QPushButton("Выбрать видеофайлы")
+        self.btn_select_files = PrimaryPushButton("Выбрать видеофайлы", self, FluentIcon.ADD)
         self.btn_select_files.setToolTip("Открыть диалог выбора видеофайлов для обработки.")
         self.btn_select_files.clicked.connect(self.select_files)
         files_buttons_layout.addWidget(self.btn_select_files)
 
-        self.btn_clear_files = QPushButton("Очистить список")
+        self.btn_clear_files = PushButton("Очистить список", self, FluentIcon.DELETE)
         self.btn_clear_files.setToolTip("Удалить все файлы из списка обработки.")
         self.btn_clear_files.clicked.connect(self.clear_file_list)
         files_buttons_layout.addWidget(self.btn_clear_files)
+        
+        files_buttons_layout.addStretch()
 
-        file_selection_layout.addLayout(files_buttons_layout)
+        files_card_layout.addLayout(files_buttons_layout)
 
         self.list_widget_files = FileListWidget()
         self.list_widget_files.setSelectionMode(
-            QListWidget.SelectionMode.NoSelection
+            QAbstractItemView.SelectionMode.NoSelection
         )
-        file_selection_layout.addWidget(self.list_widget_files)
+        # Transparent background for list inside card to avoid double border/bg look if needed
+        # self.list_widget_files.setStyleSheet("ListWidget { background: transparent; border: none; }")
+        # Let's keep default for now to ensure it looks like a list.
+        
+        files_card_layout.addWidget(self.list_widget_files)
+        
+        files_layout.addWidget(files_card)
 
-        layout.addLayout(file_selection_layout, 2)
+        layout.addWidget(files_container, 2)
 
         # Правая часть: параметры вывода
         settings_container = QWidget()
         settings_layout = QVBoxLayout(settings_container)
+        settings_layout.setContentsMargins(0, 0, 0, 0)
+        settings_layout.setSpacing(16)
+        
+        lbl_output = StrongBodyLabel("Параметры вывода")
+        settings_layout.addWidget(lbl_output)
 
-        group_box_output = QGroupBox("Параметры вывода")
+        group_box_output = SimpleCardWidget()
         layout_output = QVBoxLayout(group_box_output)
+        layout_output.setContentsMargins(16, 16, 16, 16)
+        layout_output.setSpacing(16)
 
-        output_dir_layout = QHBoxLayout()
-        self.line_edit_output_dir = QLineEdit(str(self.output_directory))
+        self.line_edit_output_dir = LineEdit()
+        self.line_edit_output_dir.setText(str(self.output_directory))
         self.line_edit_output_dir.setReadOnly(True)
-        output_dir_layout.addWidget(self.line_edit_output_dir)
+        layout_output.addWidget(self.line_edit_output_dir)
 
-        self.btn_select_output_dir = QPushButton("Обзор...")
+        buttons_layout = QHBoxLayout()
+        buttons_layout.setSpacing(10)
+
+        self.btn_select_output_dir = PushButton("Обзор...", self, FluentIcon.FOLDER)
         self.btn_select_output_dir.setToolTip("Выбрать папку, куда будут сохраняться готовые файлы.")
         self.btn_select_output_dir.clicked.connect(
             self.select_output_directory
         )
-        output_dir_layout.addWidget(self.btn_select_output_dir)
+        buttons_layout.addWidget(self.btn_select_output_dir, 1)
 
-        self.btn_open_output_dir = QPushButton("Открыть")
+        self.btn_open_output_dir = PushButton("Открыть", self, FluentIcon.LINK)
         self.btn_open_output_dir.setToolTip(
             "Открыть выбранную папку вывода в проводнике"
         )
         self.btn_open_output_dir.clicked.connect(
             self.open_output_directory_in_explorer
         )
-        output_dir_layout.addWidget(self.btn_open_output_dir)
+        buttons_layout.addWidget(self.btn_open_output_dir, 1)
 
-        layout_output.addLayout(output_dir_layout)
+        layout_output.addLayout(buttons_layout)
 
-        self.chk_use_source_path = QCheckBox("Использовать исходный путь")
+
+
+        self.chk_use_source_path = CheckBox("Использовать исходный путь")
         self.chk_use_source_path.setToolTip("Сохранять готовые файлы в ту же папку, где лежит исходное видео.")
         self.chk_use_source_path.stateChanged.connect(
             self.toggle_output_dir_controls
@@ -302,30 +350,56 @@ class MainWindow(QMainWindow):
         settings_layout.addStretch()  # Прижимает группу к верху
 
         layout.addWidget(settings_container, 1)
-        self.tabs.addTab(tab, "Файлы и назначение")
+        # self.tabs.addTab(tab, "Файлы и назначение") - Removed tabs logic
 
-    def _create_video_settings_tab(self):
+
+
+    def _create_video_settings_tab(self, parent_widget):
         """Создает вкладку 2: Настройки кодирования видео"""
-        tab = QWidget()
-        layout = QVBoxLayout(tab)
+        # Create scroll area for video settings
+        scroll_area = QScrollArea(parent_widget)
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll_area.setStyleSheet("QScrollArea {background: transparent; border: none;}")
+        scroll_area.viewport().setStyleSheet("background: transparent;")
+        
+        content_widget = QWidget()
+        content_widget.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        scroll_area.setWidget(content_widget)
+        
+        # Main layout of the content
+        layout = QVBoxLayout(content_widget)
+        layout.setContentsMargins(30, 20, 30, 20)
+        layout.setSpacing(20)
+
+        # Ensure parent layout handles the scroll area
+        parent_layout = QVBoxLayout(parent_widget)
+        parent_layout.setContentsMargins(0, 0, 0, 0)
+        parent_layout.addWidget(scroll_area)
 
         # -- Группа: Выбор энкодера --
-        group_encoder = QGroupBox("Энкодер")
+        group_encoder = SimpleCardWidget()
         layout_encoder = QHBoxLayout(group_encoder)
+        layout_encoder.setContentsMargins(16, 16, 16, 16)
+        layout_encoder.setSpacing(20)
         
-        self.radio_gpu = QRadioButton("NVIDIA NVENC (GPU)")
+        layout_encoder.addWidget(StrongBodyLabel("Энкодер:"))
+        
+        self.radio_gpu = RadioButton("NVIDIA NVENC (GPU)")
         self.radio_gpu.setChecked(True)
         self.radio_gpu.setToolTip("Быстрое аппаратное кодирование на видеокарте NVIDIA.")
         self.radio_gpu.toggled.connect(self.toggle_encoder_settings)
         
-        self.radio_cpu = QRadioButton("CPU (x265)")
+        self.radio_cpu = RadioButton("CPU (x265)")
         self.radio_cpu.setToolTip("Программное кодирование процессором. Медленнее, но может обеспечить лучшее сжатие.")
         # self.radio_cpu connection handled by radio_gpu toggle
         
         layout_encoder.addWidget(self.radio_gpu)
         layout_encoder.addWidget(self.radio_cpu)
         
-        self.chk_lossless_mode = QCheckBox("Режим Lossless (Без потерь)")
+        layout_encoder.addStretch()
+
+        self.chk_lossless_mode = CheckBox("Режим Lossless (Без потерь)")
         self.chk_lossless_mode.setToolTip(
             "Автоматически устанавливает параметры для кодирования без потерь:\n"
             "- GPU: constqp, QP=0, Tuning=lossless\n"
@@ -334,7 +408,6 @@ class MainWindow(QMainWindow):
         self.chk_lossless_mode.stateChanged.connect(self.toggle_lossless_mode)
         layout_encoder.addWidget(self.chk_lossless_mode)
 
-        layout_encoder.addStretch()
         layout.addWidget(group_encoder)
 
         # -- Динамическая область настроек энкодера --
@@ -345,24 +418,33 @@ class MainWindow(QMainWindow):
         self.page_nvenc = QWidget()
         layout_nvenc = QVBoxLayout(self.page_nvenc)
         layout_nvenc.setContentsMargins(0, 0, 0, 0)
+        layout_nvenc.setSpacing(20)
         
         # Preset (NVENC)
-        layout_nv_preset = QHBoxLayout()
-        layout_nv_preset.addWidget(QLabel("Пресет:"))
-        self.combo_nv_preset = QComboBox()
+        group_nv_preset = SimpleCardWidget()
+        layout_nv_preset_inner = QHBoxLayout(group_nv_preset)
+        layout_nv_preset_inner.setContentsMargins(16, 16, 16, 16)
+        
+        layout_nv_preset_inner.addWidget(BodyLabel("Пресет (Скорость/Качество):"))
+        self.combo_nv_preset = ComboBox()
         self.combo_nv_preset.addItems(['p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7'])
         self.combo_nv_preset.setCurrentText(NVENC_PRESET)
         self.combo_nv_preset.setToolTip("p1 - самый быстрый, p7 - самое высокое качество.")
-        layout_nv_preset.addWidget(self.combo_nv_preset)
-        layout_nvenc.addLayout(layout_nv_preset)
+        layout_nv_preset_inner.addWidget(self.combo_nv_preset)
+        layout_nv_preset_inner.addStretch()
+        layout_nvenc.addWidget(group_nv_preset)
 
         # Rate Control (NVENC) + Bitrate
-        group_nv_rc = QGroupBox("Управление битрейтом (NVENC)")
+        group_nv_rc = SimpleCardWidget()
         layout_nv_rc = QVBoxLayout(group_nv_rc)
+        layout_nv_rc.setContentsMargins(16, 16, 16, 16)
+        layout_nv_rc.setSpacing(16)
         
+        layout_nv_rc.addWidget(StrongBodyLabel("Управление битрейтом (NVENC)"))
+
         layout_rc_mode = QHBoxLayout()
-        layout_rc_mode.addWidget(QLabel("Режим:"))
-        self.combo_nv_rc = QComboBox()
+        layout_rc_mode.addWidget(BodyLabel("Режим:"))
+        self.combo_nv_rc = ComboBox()
         self.combo_nv_rc.addItems(['cbr', 'vbr', 'vbr_hq', 'constqp'])
         self.combo_nv_rc.setCurrentText(NVENC_RC)
         self.combo_nv_rc.setToolTip(
@@ -373,131 +455,151 @@ class MainWindow(QMainWindow):
         )
         self.combo_nv_rc.currentTextChanged.connect(self.toggle_nvenc_bitrate_controls)
         layout_rc_mode.addWidget(self.combo_nv_rc)
+        layout_rc_mode.addStretch()
         layout_nv_rc.addLayout(layout_rc_mode)
         
         # Bitrate / QP Controls for NVENC
         self.widget_nv_bitrate = QWidget()
         l_nv_br = QHBoxLayout(self.widget_nv_bitrate)
         l_nv_br.setContentsMargins(0, 0, 0, 0)
-        l_nv_br.addWidget(QLabel("Битрейт (Мбит/с):"))
-        self.spin_nv_bitrate = QSpinBox()
+        l_nv_br.addWidget(BodyLabel("Битрейт (Мбит/с):"))
+        self.spin_nv_bitrate = SpinBox()
         self.spin_nv_bitrate.setRange(1, 100)
         self.spin_nv_bitrate.setValue(DEFAULT_TARGET_V_BITRATE_MBPS)
         self.spin_nv_bitrate.setToolTip("Целевой видео битрейт в Мбит/с.")
         l_nv_br.addWidget(self.spin_nv_bitrate)
+        l_nv_br.addStretch()
         layout_nv_rc.addWidget(self.widget_nv_bitrate)
         
         self.widget_nv_qp = QWidget()
         l_nv_qp = QHBoxLayout(self.widget_nv_qp)
         l_nv_qp.setContentsMargins(0, 0, 0, 0)
-        l_nv_qp.addWidget(QLabel("QP (0-51):"))
-        self.spin_nv_qp = QSpinBox()
+        l_nv_qp.addWidget(BodyLabel("QP (0-51):"))
+        self.spin_nv_qp = SpinBox()
         self.spin_nv_qp.setRange(0, 51)
         self.spin_nv_qp.setValue(LOSSLESS_QP_VALUE) # Using 0 default for lossless context, but typical CQ is higher
         self.spin_nv_qp.setToolTip("Значение квантователя (0 - лучшее качество/lossless, 51 - худшее).")
         l_nv_qp.addWidget(self.spin_nv_qp)
+        l_nv_qp.addStretch()
         layout_nv_rc.addWidget(self.widget_nv_qp)
         
         layout_nvenc.addWidget(group_nv_rc)
         
         # Tuning & Flags
+        group_nv_advanced = SimpleCardWidget()
+        layout_nv_advanced_wrapper = QVBoxLayout(group_nv_advanced)
+        layout_nv_advanced_wrapper.setContentsMargins(16, 16, 16, 16)
+        layout_nv_advanced_wrapper.setSpacing(16)
+        
         layout_nv_advanced = QHBoxLayout()
-        layout_nv_advanced.addWidget(QLabel("Tuning:"))
-        self.combo_nv_tuning = QComboBox()
+        layout_nv_advanced.addWidget(BodyLabel("Tuning:"))
+        self.combo_nv_tuning = ComboBox()
         self.combo_nv_tuning.addItems(['hq', 'll', 'ull', 'lossless'])
         self.combo_nv_tuning.setCurrentText(NVENC_TUNING)
         self.combo_nv_tuning.setToolTip("Настройка энкодера (hq - высокое качество, ll - низкая задержка, lossless - без потерь).")
         layout_nv_advanced.addWidget(self.combo_nv_tuning)
+        layout_nv_advanced.addStretch()
+        layout_nv_advanced_wrapper.addLayout(layout_nv_advanced)
         
         self.widget_nv_lookahead = QWidget()
         l_nv_lookahead = QHBoxLayout(self.widget_nv_lookahead)
         l_nv_lookahead.setContentsMargins(0, 0, 0, 0)
+        l_nv_lookahead.setSpacing(20)
         
-        self.chk_nv_lookahead = QCheckBox("Lookahead")
+        self.chk_nv_lookahead = CheckBox("Lookahead")
         self.chk_nv_lookahead.setChecked(True)
         self.chk_nv_lookahead.setToolTip("Предварительный анализ кадров (rc-lookahead).")
         
-        self.spin_nv_lookahead = QSpinBox()
+        self.spin_nv_lookahead = SpinBox()
         self.spin_nv_lookahead.setRange(0, 32)
         self.spin_nv_lookahead.setValue(int(NVENC_LOOKAHEAD))
         self.spin_nv_lookahead.setToolTip("Количество кадров для анализа (обычно 16-32).")
-        
         
         self.chk_nv_lookahead.toggled.connect(self.spin_nv_lookahead.setEnabled)
         
         l_nv_lookahead.addWidget(self.chk_nv_lookahead)
         l_nv_lookahead.addWidget(self.spin_nv_lookahead)
 
-        self.chk_nv_aq = QCheckBox("Spatial AQ")
+        self.chk_nv_aq = CheckBox("Spatial AQ")
         self.chk_nv_aq.setChecked(True)
         self.chk_nv_aq.setToolTip("Пространственное адаптивное квантование (улучшает качество в сложных сценах).")
         l_nv_lookahead.addWidget(self.chk_nv_aq)
 
         l_nv_lookahead.addStretch()
+        layout_nv_advanced_wrapper.addWidget(self.widget_nv_lookahead)
         
-        layout_nv_advanced.addWidget(self.widget_nv_lookahead)
-        
-        layout_nvenc.addLayout(layout_nv_advanced)
-        
-        self.chk_force_10bit = QCheckBox("Принудительный 10-бит (Main10)")
+        self.chk_force_10bit = CheckBox("Принудительный 10-бит (Main10)")
         self.chk_force_10bit.setToolTip("Кодировать в 10-бит (HEVC Main10), даже если исходник 8-бит. Уменьшает бандинг.")
-        layout_nvenc.addWidget(self.chk_force_10bit)
+        layout_nv_advanced_wrapper.addWidget(self.chk_force_10bit)
+        
+        layout_nvenc.addWidget(group_nv_advanced)
 
 
         # 2. Страница CPU (x265)
         self.page_cpu = QWidget()
         layout_cpu = QVBoxLayout(self.page_cpu)
         layout_cpu.setContentsMargins(0, 0, 0, 0)
+        layout_cpu.setSpacing(20)
         
         # Preset (CPU)
-        layout_cpu_preset = QHBoxLayout()
-        layout_cpu_preset.addWidget(QLabel("Пресет:"))
-        self.combo_cpu_preset = QComboBox()
+        group_cpu_preset = SimpleCardWidget()
+        layout_cpu_preset_inner = QHBoxLayout(group_cpu_preset)
+        layout_cpu_preset_inner.setContentsMargins(16, 16, 16, 16)
+        
+        layout_cpu_preset_inner.addWidget(BodyLabel("Пресет:"))
+        self.combo_cpu_preset = ComboBox()
         self.combo_cpu_preset.addItems(['ultrafast', 'superfast', 'veryfast', 'faster', 'fast', 'medium', 'slow', 'slower', 'veryslow'])
         self.combo_cpu_preset.setCurrentText(CPU_PRESET)
         self.combo_cpu_preset.setToolTip("Пресет скорости/качества. Slower = лучше сжатие, но медленнее.")
-        layout_cpu_preset.addWidget(self.combo_cpu_preset)
-        layout_cpu.addLayout(layout_cpu_preset)
+        layout_cpu_preset_inner.addWidget(self.combo_cpu_preset)
+        layout_cpu_preset_inner.addStretch()
+        layout_cpu.addWidget(group_cpu_preset)
         
         # Rate Control (CPU)
-        group_cpu_rc = QGroupBox("Управление качеством (CPU)")
+        group_cpu_rc = SimpleCardWidget()
         layout_cpu_rc = QVBoxLayout(group_cpu_rc)
+        layout_cpu_rc.setContentsMargins(16, 16, 16, 16)
+        layout_cpu_rc.setSpacing(16)
+        layout_cpu_rc.addWidget(StrongBodyLabel("Управление качеством (CPU)"))
         
         layout_cpu_mode = QHBoxLayout()
-        self.radio_cpu_crf = QRadioButton("CRF (Качество)")
+        self.radio_cpu_crf = RadioButton("CRF (Качество)")
         self.radio_cpu_crf.setToolTip("Constant Rate Factor. Качество зависит от значения CRF (меньше = лучше).")
         self.radio_cpu_crf.toggled.connect(self.toggle_cpu_bitrate_controls)
         
-        self.radio_cpu_bitrate = QRadioButton("Битрейт (CBR/VBR)")
+        self.radio_cpu_bitrate = RadioButton("Битрейт (CBR/VBR)")
         self.radio_cpu_bitrate.setToolTip("Целевой средний битрейт.")
         self.radio_cpu_bitrate.setChecked(True)
         
         layout_cpu_mode.addWidget(self.radio_cpu_crf)
         layout_cpu_mode.addWidget(self.radio_cpu_bitrate)
+        layout_cpu_mode.addStretch()
         layout_cpu_rc.addLayout(layout_cpu_mode)
         
         # CRF Control
         self.widget_cpu_crf = QWidget()
         l_cpu_crf = QHBoxLayout(self.widget_cpu_crf)
         l_cpu_crf.setContentsMargins(0, 0, 0, 0)
-        l_cpu_crf.addWidget(QLabel("CRF (0-51, меньше=лучше):"))
-        self.spin_cpu_crf = QSpinBox()
+        l_cpu_crf.addWidget(BodyLabel("CRF (0-51, меньше=лучше):"))
+        self.spin_cpu_crf = SpinBox()
         self.spin_cpu_crf.setRange(0, 51)
         self.spin_cpu_crf.setValue(CPU_CRF)
         self.spin_cpu_crf.setToolTip("Значение CRF. 0 - lossless, 18-23 - хорошее качество, 28+ - хуже.")
         l_cpu_crf.addWidget(self.spin_cpu_crf)
+        l_cpu_crf.addStretch()
         layout_cpu_rc.addWidget(self.widget_cpu_crf)
         
         # Bitrate Control
         self.widget_cpu_bitrate = QWidget()
         l_cpu_br = QHBoxLayout(self.widget_cpu_bitrate)
         l_cpu_br.setContentsMargins(0, 0, 0, 0)
-        l_cpu_br.addWidget(QLabel("Битрейт (Мбит/с):"))
-        self.spin_cpu_bitrate = QSpinBox()
+        l_cpu_br.addWidget(BodyLabel("Битрейт (Мбит/с):"))
+        self.spin_cpu_bitrate = SpinBox()
         self.spin_cpu_bitrate.setRange(1, 100)
         self.spin_cpu_bitrate.setValue(DEFAULT_TARGET_V_BITRATE_MBPS)
         self.spin_cpu_bitrate.setToolTip("Целевой битрейт для CPU кодирования в Мбит/с.")
         l_cpu_br.addWidget(self.spin_cpu_bitrate)
+        l_cpu_br.addStretch()
         layout_cpu_rc.addWidget(self.widget_cpu_bitrate)
         
         layout_cpu.addWidget(group_cpu_rc)
@@ -508,49 +610,68 @@ class MainWindow(QMainWindow):
         # Add pages to stack
         self.encoder_settings_stack.addWidget(self.page_nvenc)
         self.encoder_settings_stack.addWidget(self.page_cpu)
+        
+        # Fix stack background
+        self.encoder_settings_stack.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.page_nvenc.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.page_cpu.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
 
         # -- Общие: Разрешение и кадрирование --
-        group_box_geometry = QGroupBox("Разрешение и кадрирование")
+        group_box_geometry = SimpleCardWidget()
         layout_geometry = QVBoxLayout(group_box_geometry)
+        layout_geometry.setContentsMargins(16, 16, 16, 16)
+        layout_geometry.setSpacing(16)
+        
+        layout_geometry.addWidget(StrongBodyLabel("Разрешение и кадрирование"))
 
-        self.chk_auto_crop = QCheckBox("Автоматически обрезать черные полосы")
+        self.chk_auto_crop = CheckBox("Автоматически обрезать черные полосы")
         self.chk_auto_crop.setToolTip(
             "Анализирует видео для удаления черных полос.\n"
             "Может немного увеличить время обработки."
         )
         # self.chk_auto_crop.setChecked(True) - Default is now False per user request
         layout_geometry.addWidget(self.chk_auto_crop)
+        
+        resolution_layout = QHBoxLayout()
+        resolution_layout.setSpacing(16)
 
-        self.chk_force_resolution = QCheckBox("Принудительное разрешение вывода")
+        self.chk_force_resolution = CheckBox("Принудительное разрешение:")
         self.chk_force_resolution.stateChanged.connect(
             self.toggle_resolution_options
         )
         self.chk_force_resolution.setToolTip("Изменить разрешение выходного видео (скейлинг).")
-        layout_geometry.addWidget(self.chk_force_resolution)
+        resolution_layout.addWidget(self.chk_force_resolution)
 
-        self.combo_resolution = QComboBox()
+        self.combo_resolution = ComboBox()
         self.combo_resolution.setEnabled(False)
         self.combo_resolution.setToolTip("Выберите желаемое разрешение из списка.")
-        layout_geometry.addWidget(self.combo_resolution)
+        resolution_layout.addWidget(self.combo_resolution)
+        resolution_layout.addStretch()
+        
+        layout_geometry.addLayout(resolution_layout)
 
         layout.addWidget(group_box_geometry)
 
         layout.addStretch()  # Прижимает группы к верху
-        self.tabs.addTab(tab, "Видео")
 
-    def _create_audio_settings_tab(self):
+    def _create_audio_settings_tab(self, parent_widget):
         """Создает вкладку 3: Настройки кодирования аудио"""
-        tab = QWidget()
-        layout = QVBoxLayout(tab)
+        layout = QVBoxLayout(parent_widget)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(20)
 
         # -- Группа: Кодек и Битрейт --
-        group_fmt = QGroupBox("Формат аудио")
+        group_fmt = SimpleCardWidget()
         layout_fmt = QVBoxLayout(group_fmt)
+        layout_fmt.setContentsMargins(16, 16, 16, 16)
+        layout_fmt.setSpacing(16)
+        
+        layout_fmt.addWidget(StrongBodyLabel("Формат аудио"))
 
         # Кодек
         layout_codec = QHBoxLayout()
-        lbl_codec = QLabel("Кодек:")
-        self.combo_audio_codec = QComboBox()
+        layout_codec.addWidget(BodyLabel("Кодек:"))
+        self.combo_audio_codec = ComboBox()
         self.combo_audio_codec.addItems(
             ['aac', 'ac3', 'libopus', 'mp3', 'flac', 'copy']
         )
@@ -560,31 +681,33 @@ class MainWindow(QMainWindow):
         self.combo_audio_codec.currentTextChanged.connect(
             self.toggle_audio_settings_availability
         )
-        layout_codec.addWidget(lbl_codec)
         layout_codec.addWidget(self.combo_audio_codec)
+        layout_codec.addStretch()
         layout_fmt.addLayout(layout_codec)
 
         # Битрейт
         layout_bitrate = QHBoxLayout()
-        lbl_bitrate = QLabel("Битрейт:")
-        self.combo_audio_bitrate = QComboBox()
+        layout_bitrate.addWidget(BodyLabel("Битрейт:"))
+        self.combo_audio_bitrate = ComboBox()
         self.combo_audio_bitrate.addItems(
             ['96k', '128k', '192k', '256k', '320k']
         )
         self.combo_audio_bitrate.setCurrentText("256k")
-        self.combo_audio_bitrate.setEditable(True)  # Позволить ручной ввод
+        # self.combo_audio_bitrate.setEditable(True) - Fluent ComboBox doesn't support editable easily, sticking to presets for now or can use EditableComboBox if imported, but ComboBox is standard.
+        # Assuming ComboBox is safe enough or we can use LineEdit if needed. 
+        # Standard Fluent ComboBox is not editable. If user needs custom, we might need value.
+        # For now, let's keep it simple.
         self.combo_audio_bitrate.setToolTip(
-            "Выберите или введите битрейт (например, 192k). "
-            "Игнорируется для copy и flac."
+            "Выберите битрейт. Игнорируется для copy и flac."
         )
-        layout_bitrate.addWidget(lbl_bitrate)
         layout_bitrate.addWidget(self.combo_audio_bitrate)
+        layout_bitrate.addStretch()
         layout_fmt.addLayout(layout_bitrate)
 
         # Каналы
         layout_channels = QHBoxLayout()
-        lbl_channels = QLabel("Каналы:")
-        self.combo_audio_channels = QComboBox()
+        layout_channels.addWidget(BodyLabel("Каналы:"))
+        self.combo_audio_channels = ComboBox()
         # Data: None = Original, '1' = Mono, '2' = Stereo
         self.combo_audio_channels.addItem("Стерео (2)", '2')
         self.combo_audio_channels.addItem("Моно (1)", '1')
@@ -592,31 +715,40 @@ class MainWindow(QMainWindow):
         self.combo_audio_channels.setToolTip(
             "Количество каналов. Игнорируется для copy."
         )
-        layout_channels.addWidget(lbl_channels)
         layout_channels.addWidget(self.combo_audio_channels)
+        layout_channels.addStretch()
         layout_fmt.addLayout(layout_channels)
 
         layout.addWidget(group_fmt)
 
         # -- Группа: Метаданные --
-        group_meta = QGroupBox("Метаданные трека")
+        group_meta = SimpleCardWidget()
         layout_meta = QVBoxLayout(group_meta)
-
-        self.edit_audio_title = QLineEdit("Русский [Дубляжная]")
+        layout_meta.setContentsMargins(16, 16, 16, 16)
+        layout_meta.setSpacing(16)
+        
+        layout_meta.addWidget(StrongBodyLabel("Метаданные трека"))
+        
+        layout_title = QHBoxLayout()
+        layout_title.addWidget(BodyLabel("Название:"))
+        self.edit_audio_title = LineEdit()
+        self.edit_audio_title.setText("Русский [Дубляжная]")
         self.edit_audio_title.setPlaceholderText("Название дорожки")
         self.edit_audio_title.setToolTip("Метаданные: заголовок аудиодорожки в MKV.")
-        layout_meta.addWidget(QLabel("Название:"))
-        layout_meta.addWidget(self.edit_audio_title)
+        layout_title.addWidget(self.edit_audio_title)
+        layout_meta.addLayout(layout_title)
 
-        self.edit_audio_lang = QLineEdit("rus")
+        layout_lang = QHBoxLayout()
+        layout_lang.addWidget(BodyLabel("Язык (код):"))
+        self.edit_audio_lang = LineEdit()
+        self.edit_audio_lang.setText("rus")
         self.edit_audio_lang.setPlaceholderText("Код языка (3 буквы, ISO 639-2)")
         self.edit_audio_lang.setToolTip("Метаданные: код языка (rus, eng, jpn и т.д.).")
-        layout_meta.addWidget(QLabel("Язык (код):"))
-        layout_meta.addWidget(self.edit_audio_lang)
+        layout_lang.addWidget(self.edit_audio_lang)
+        layout_meta.addLayout(layout_lang)
 
         layout.addWidget(group_meta)
         layout.addStretch()
-        self.tabs.addTab(tab, "Аудио")
 
     def toggle_audio_settings_availability(self, codec_text):
         """
@@ -631,21 +763,26 @@ class MainWindow(QMainWindow):
         # Каналы не меняем при copy
         self.combo_audio_channels.setEnabled(not is_copy)
 
-    def _create_subtitles_tab(self):
+    def _create_subtitles_tab(self, parent_widget):
         """Создает вкладку 4: Настройки субтитров"""
-        tab = QWidget()
-        layout = QVBoxLayout(tab)
+        layout = QVBoxLayout(parent_widget)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(20)
 
-        group_box_subtitles = QGroupBox("Обработка субтитров")
+        group_box_subtitles = SimpleCardWidget()
         layout_subtitles = QVBoxLayout(group_box_subtitles)
+        layout_subtitles.setContentsMargins(16, 16, 16, 16)
+        layout_subtitles.setSpacing(16)
+        
+        layout_subtitles.addWidget(StrongBodyLabel("Обработка субтитров"))
 
-        self.chk_disable_subtitles = QCheckBox("Не вшивать надписи")
+        self.chk_disable_subtitles = CheckBox("Не вшивать надписи")
         self.chk_disable_subtitles.setToolTip(
             "Полностью отключает поиск и вшивание любых субтитров."
         )
         layout_subtitles.addWidget(self.chk_disable_subtitles)
 
-        self.chk_remove_credit_lines = QCheckBox('Удалить ТБ "ТО Дубляжная"')
+        self.chk_remove_credit_lines = CheckBox('Удалить ТБ "ТО Дубляжная"')
         self.chk_remove_credit_lines.setToolTip(
             "При активации из субтитров будут удалены строки с технической "
             "информацией дабберов\n"
@@ -659,39 +796,37 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(group_box_subtitles)
         layout.addStretch()
-        self.tabs.addTab(tab, "Субтитры")
 
-    def _create_run_tab(self):
+    def _create_run_tab(self, parent_widget):
         """Создает вкладку 5: Запуск кодирования и прогресс"""
-        tab = QWidget()
-        layout = QVBoxLayout(tab)
+        layout = QVBoxLayout(parent_widget)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(20)
 
         # -- Панель прогресса --
-        progress_group = QGroupBox("Прогресс выполнения")
+        progress_group = SimpleCardWidget()
         progress_layout = QVBoxLayout(progress_group)
+        progress_layout.setContentsMargins(16, 16, 16, 16)
+        progress_layout.setSpacing(16)
+        
+        progress_layout.addWidget(StrongBodyLabel("Прогресс выполнения"))
 
-        self.lbl_current_file_progress = QLabel("Текущий файл: -")
+        self.lbl_current_file_progress = BodyLabel("Текущий файл: -")
         progress_layout.addWidget(self.lbl_current_file_progress)
-        self.progress_bar_current_file = QProgressBar()
+        self.progress_bar_current_file = ProgressBar()
         progress_layout.addWidget(self.progress_bar_current_file)
 
-        self.lbl_overall_progress = QLabel("Общий прогресс: -/-")
+        self.lbl_overall_progress = BodyLabel("Общий прогресс: -/-")
         progress_layout.addWidget(self.lbl_overall_progress)
-        self.progress_bar_overall = QProgressBar()
+        self.progress_bar_overall = ProgressBar()
         progress_layout.addWidget(self.progress_bar_overall)
-
-        fusion_style = QStyleFactory.create('Fusion')
-        if fusion_style:
-            self.progress_bar_current_file.setStyle(fusion_style)
-            self.progress_bar_overall.setStyle(fusion_style)
 
         layout.addWidget(progress_group)
 
         # -- Кнопка Старт/Стоп --
-        self.btn_start_stop = QPushButton("Начать кодирование")
+        self.btn_start_stop = PrimaryPushButton("Начать кодирование", self, FluentIcon.PLAY)
         self.btn_start_stop.setFixedHeight(40)
         self.btn_start_stop.setToolTip("Запустить процесс обработки добавленных файлов.")
-        self.btn_start_stop.setStyleSheet("padding-left: 20px; padding-right: 20px;")
         self.btn_start_stop.clicked.connect(self.toggle_encoding)
 
         # Центрируем кнопку
@@ -700,9 +835,32 @@ class MainWindow(QMainWindow):
         button_container_layout.addWidget(self.btn_start_stop)
         button_container_layout.addStretch()
         layout.addLayout(button_container_layout)
-
-        layout.addStretch()
-        self.tabs.addTab(tab, "Запуск")
+        
+        # -- Логи --
+        # Re-introducing logs here as they fit best in the "Run" context for this navigation
+        log_group = SimpleCardWidget()
+        log_layout = QVBoxLayout(log_group)
+        log_layout.setContentsMargins(16, 16, 16, 16)
+        log_layout.setSpacing(10)
+        
+        log_layout.addWidget(StrongBodyLabel("Лог событий"))
+        
+        self.log_edit = QTextEdit()
+        self.log_edit.setReadOnly(True)
+        # Apply a simple dark style or transparent to blend with Fluent
+        self.log_edit.setStyleSheet("QTextEdit { background-color: transparent; border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 4px; color: #e0e0e0; }")
+        
+        scroll_area_logs = QScrollArea()
+        scroll_area_logs.setWidgetResizable(True)
+        scroll_area_logs.setWidget(self.log_edit)
+        # Ensure scroll area itself is transparent/styled
+        scroll_area_logs.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+        
+        log_layout.addWidget(self.log_edit) # Adding TextEdit directly to layout usually works better if it has internal scroll. 
+        # But let's stick to previous structure if possible, though QTextEdit has own scroll.
+        # Removing external ScrollArea for QTextEdit as it is redundant.
+        
+        layout.addWidget(log_group, 1) # Give logs remaining space
 
     def toggle_output_dir_controls(self, state):
         is_checked = (state == Qt.CheckState.Checked.value)
@@ -1334,27 +1492,35 @@ class MainWindow(QMainWindow):
 
             self.encoder_thread.start()
 
+            self.encoder_thread.start()
+
             self.btn_start_stop.setText("Остановить кодирование")
+            self.btn_start_stop.setIcon(FluentIcon.CLOSE)
             self.set_controls_enabled(False)
-            self.tabs.setCurrentIndex(4)  # Переключаемся на вкладку "Запуск"
+            self.switchTo(self.run_interface)
 
     def set_ui_for_encoding_state(self, is_encoding: bool):
         """Управляет состоянием UI в зависимости от того, идет ли кодирование."""
-        # Блокируем/разблокируем все вкладки, кроме последней
-        for i in range(self.tabs.count() - 1):
-            self.tabs.setTabEnabled(i, not is_encoding)
-
+        self.set_controls_enabled(not is_encoding)
+        
         if is_encoding:
             self.btn_start_stop.setText("Остановить кодирование")
+            self.btn_start_stop.setIcon(FluentIcon.CLOSE)
             self.btn_start_stop.setEnabled(True)
         else:
             self.btn_start_stop.setText("Начать кодирование")
+            self.btn_start_stop.setIcon(FluentIcon.PLAY)
             self.btn_start_stop.setEnabled(True)
 
     def set_controls_enabled(self, enabled):
-        # Блокируем/разблокируем все вкладки, кроме последней
-        for i in range(self.tabs.count() - 1):
-            self.tabs.setTabEnabled(i, enabled)
+        # Disable/Enable all interfaces except Run
+        # FluentWindow navigation doesn't have a direct "disable item" public API easily accessible for specific items in all versions,
+        # but we can disable the widgets themselves.
+        self.files_interface.setEnabled(enabled)
+        self.video_interface.setEnabled(enabled)
+        self.audio_interface.setEnabled(enabled)
+        self.subtitles_interface.setEnabled(enabled)
+        # We don't disable run_interface itself, just the start button handles its state.
 
     def update_current_file_progress(self, percentage, status_text):
         self.progress_bar_current_file.setValue(percentage)

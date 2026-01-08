@@ -1,8 +1,10 @@
 import sys
 
-from PyQt6.QtCore import QT_VERSION_STR
+from PyQt6.QtCore import QT_VERSION_STR, Qt
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import QApplication
+
+from qfluentwidgets import setTheme, Theme
 
 from src.app_config import APP_DIR, APP_ICON_PATH
 from src.resources.resources import resource_path
@@ -17,7 +19,14 @@ if __name__ == '__main__':
         myappid = u'Hardsub Encoder' # произвольная строка
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
 
+    # Enable High DPI scaling
+    if hasattr(Qt, 'AA_EnableHighDpiScaling'):
+        QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
+    if hasattr(Qt, 'AA_UseHighDpiPixmaps'):
+        QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
+
     app = QApplication(sys.argv)
+    setTheme(Theme.DARK)
     
     # Можно установить стиль, если хочется
     # app.setStyle('Fusion')
