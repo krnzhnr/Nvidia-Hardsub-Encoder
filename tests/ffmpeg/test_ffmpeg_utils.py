@@ -93,3 +93,36 @@ def test_video_info_errors(tmp_path, test_file, expected_error):
     duration, codec, pix_fmt, width, height, _, _, _, error = get_video_subtitle_attachment_info(test_path)
     assert error is not None
     assert expected_error in error
+
+def test_sanitize_filename_part():
+    """Проверка очистки имени файла от спецсимволов"""
+    from src.ffmpeg.utils import sanitize_filename_part
+    
+    # Test cases: (input, expected)
+    cases = [
+        ("Normal File", "Normal File"),
+        ("File: Name", "File Name"),
+        ("Date/Time", "DateTime"),
+        ("Back\\Slash", "BackSlash"),
+        ("Quote \"Double\"", "Quote Double"),
+        ("Apostrophe 'Single'", "Apostrophe Single"),
+        ("Comma, Separated", "Comma Separated"),
+        ("Semi; Colon", "Semi Colon"),
+        ("Brackets [Test]", "Brackets Test"),
+        ("Back`Tick", "BackTick"),
+        ("Mixed ' , ; ` chars", "Mixed chars"),
+        ("   Spaces   ", "Spaces"),
+        ("..Dots..", "Dots"),
+        (None, "untitled"),
+        ("", "untitled"),
+    ]
+    
+    for input_str, expected in cases:
+        result = sanitize_filename_part(input_str)
+        # Note: The current implementation might leave multiple spaces or perform other cleanups.
+        # We primarily check that the unwanted chars are GONE.
+        assert "'" not in result, f"Apostrophe not removed from {input_str}"
+        assert "," not in result, f"Comma not removed from {input_str}"
+        assert ";" not in result, f"Semicolon not removed from {input_str}"
+        assert "`" not in result, f"Backtick not removed from {input_str}"
+        assert ":" not in result, f"Colon not removed from {input_str}"

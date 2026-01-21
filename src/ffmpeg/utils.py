@@ -8,7 +8,8 @@ def sanitize_filename_part(text: str, max_length: int = 50) -> str:
         return "untitled"
 
     # Удаляем или заменяем недопустимые символы (добавлены \n, \r, \t и т.д.)
-    sanitized = re.sub(r'[\\/:*?"<>|\[\]\n\r\t]+', '', text)
+    # Также удаляем символы, которые ломают экранирование в FFmpeg фильтрах: ' , ; `
+    sanitized = re.sub(r"[\\/:*?\"<>|\[\]\n\r\t',;`]+", '', text)
     sanitized = sanitized.strip('. ')  # Удаляем точки и пробелы с краев
 
     if len(sanitized) > max_length:
