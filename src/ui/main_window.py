@@ -1487,10 +1487,8 @@ class MainWindow(FluentWindow):
 
             self.encoder_thread.started.connect(self.encoder_worker.run)
             self.encoder_thread.finished.connect(
-                self.encoder_thread.deleteLater
+            self.encoder_thread.deleteLater
             )
-
-            self.encoder_thread.start()
 
             self.encoder_thread.start()
 

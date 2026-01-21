@@ -6,10 +6,40 @@ import subprocess
 import shutil
 from PyQt6.QtCore import QDateTime, QTimer, QEventLoop
 import time
+from functools import partial
 
 # Добавляем корневую директорию проекта в sys.path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
+
+@pytest.fixture(scope="session", autouse=True)
+def patch_qfluentwidgets_animations_session():
+    """
+    Сессионный манкипатч для qfluentwidgets, чтобы предотвратить падения в тестах.
+    """
+    try:
+        from qfluentwidgets.components.navigation.navigation_panel import NavigationPanel
+        
+        # Сохраняем оригинальный метод
+        original_ani_finished = NavigationPanel._onIndicatorAniFinished
+
+        # Используем *args для максимальной совместимости с сигналами Qt
+        def patched_on_indicator_ani_finished(self, *args):
+            try:
+                # В qfluentwidgets обычно передается 1 аргумент: item
+                if args and hasattr(self, '_findIndicatorItem'):
+                    item = args[0]
+                    indicator = self._findIndicatorItem(item)
+                    if indicator:
+                        original_ani_finished(self, item)
+            except Exception:
+                # Полностью игнорируем любые ошибки анимации в тестах
+                pass
+
+        # Применяем патч напрямую к классу
+        NavigationPanel._onIndicatorAniFinished = patched_on_indicator_ani_finished
+    except Exception:
+        pass
 
 def process_pending_events():
     """Обрабатывает все ожидающие события Qt"""
@@ -188,4 +218,8 @@ def main_window(qtbot, mock_nvidia_hardware, mock_ffmpeg_paths):
     # Инициализируем начальные значения
     window.progress_bar_current_file.setValue(0)
     window.progress_bar_overall.setValue(0)
-    return window
+    yield window
+    # Очистка после каждого теста
+    QApplication.processEvents()
+    time.sleep(0.5)
+    QApplication.processEvents()

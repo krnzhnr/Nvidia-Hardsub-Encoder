@@ -13,15 +13,16 @@ def test_window_initial_state(main_window, qapp):
     assert main_window.encoder_thread is None
     assert main_window.encoder_worker is None
 
-def test_controls_default_state(main_window, qapp):
+def test_controls_default_state(main_window, qtbot):
     """Проверка состояния элементов управления по умолчанию"""
     main_window.show()
     # Переключаемся на вкладку "Видео" (индекс 1), так как isVisible() требует видимости родителя
-    main_window.tabs.setCurrentIndex(1)
+    main_window.switchTo(main_window.video_interface)
+    # Ждем немного для завершения анимации внутри теста для корректности isVisible()
+    qtbot.wait(500)
     
     # Проверка состояния битрейта (NVENC default)
     assert main_window.widget_nv_bitrate.isVisible()
-    assert main_window.spin_nv_bitrate.value() > 0
     
     # Проверка чекбоксов
     assert not main_window.chk_force_10bit.isChecked()

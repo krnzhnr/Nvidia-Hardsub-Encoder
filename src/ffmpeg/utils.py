@@ -21,7 +21,7 @@ def sanitize_filename_part(text: str, max_length: int = 50) -> str:
     return sanitized
 
 def escape_ffmpeg_path(path_str: str) -> str:
-    """
+    r"""
     Экранирует путь для использования внутри фильтров FFmpeg (например, subtitles=filename='PATH').
     Учитывает правила экранирования:
     1. Обратные слеши \ меняются на прямые / (POSIX style).

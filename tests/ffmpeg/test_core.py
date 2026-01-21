@@ -29,9 +29,11 @@ def test_check_executable_with_existing_file(tmp_path):
     assert isinstance(msg, str)
     assert "найден" in msg.lower()
 
-def test_check_executable_with_nonexistent_file(tmp_path):
+def test_check_executable_with_nonexistent_file(tmp_path, monkeypatch):
     """Проверка несуществующего файла"""
     test_file = tmp_path / "nonexistent.exe"
+    # Мокаем shutil.which чтобы он точно ничего не нашел в системе
+    monkeypatch.setattr("shutil.which", lambda x: None)
     result, msg = check_executable("test", test_file)
     assert result is False
     assert isinstance(msg, str)

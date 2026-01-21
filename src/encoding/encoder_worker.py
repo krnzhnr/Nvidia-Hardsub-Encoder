@@ -93,6 +93,10 @@ class EncoderWorker(QObject):
         self.processed_files_time = 0
         self.last_file_speed = 1.0
 
+        # Буфер для накопления всего stderr
+        self._full_stderr_log = []
+
+
     def _log(self, message, level="info"):
         self.log_message.emit(message, level)
 
@@ -174,6 +178,8 @@ class EncoderWorker(QObject):
             f"Начало обработки: {input_file_path.name} ---",
             "info"
         )
+        # Очищаем буфер stderr перед началом обработки нового файла
+        self._full_stderr_log = []
 
         try:
             sane_stem = sanitize_filename_part(
@@ -499,6 +505,9 @@ class EncoderWorker(QObject):
             _, percent, speed, fps, bitrate, eta, _ = parse_ffmpeg_output_for_progress(
                 line, self.current_file_duration
             )
+            
+            # Накапливаем строку в общий лог
+            self._full_stderr_log.append(line)
 
             if percent is not None:
                 try:
@@ -572,6 +581,15 @@ class EncoderWorker(QObject):
         stderr_text = self._process.readAllStandardError().data().decode(
             'utf-8', errors='ignore'
         )
+        
+        # Если что-то осталось в буфере (последние байты), добавляем
+        if stderr_text:
+             for line in stderr_text.splitlines():
+                 if line:
+                     self._full_stderr_log.append(line)
+
+        # Собираем полный текст из накопителя
+        full_stderr_text = "\n".join(self._full_stderr_log)
 
         if self._was_stopped_manually:
             self._log(f"  Кодирование {current_file_name} прервано.", "warning")
@@ -594,12 +612,23 @@ class EncoderWorker(QObject):
             if self.current_file_duration:
                 self.processed_files_duration += self.current_file_duration
         else:
-            error_details = self.analyze_ffmpeg_stderr(stderr_text)
+            error_details = self.analyze_ffmpeg_stderr(full_stderr_text)
             self._log(
                 f"  [ОШИБКА] FFmpeg завершился с кодом {exit_code} "
                 f"для {current_file_name}.", "error"
             )
             self._log(f"    Причина: {error_details}", "error")
+            
+            # --- ИЗМЕНЕНИЕ: Вывод полного лога FFmpeg в отладочный лог при ошибке ---
+            self._log(f"    --- Полный вывод FFmpeg (STDERR) ---", "debug")
+            # Разбьем на строки, чтобы не забивать лог одной гигантской строкой (если поддерживается)
+            # Или просто выведем кусками. Ограничим последние 50 строк для читаемости в GUI,
+            # но можно вывести всё.
+            # Пользователь просил вывод в терминал вывода ffmpeg при ошибке.
+            for line in self._full_stderr_log[-50:]: # Последние 50 строк
+                 self._log(f"    ffmpeg> {line}", "debug")
+            self._log(f"    --- Конец вывода FFmpeg ---", "debug")
+
             self.file_processed.emit(
                 current_file_name, False, f"Ошибка FFmpeg: {error_details}"
             )
@@ -666,6 +695,18 @@ class EncoderWorker(QObject):
             return "Файл или папка не найдены (No such file or directory)."
         if "Permission denied" in stderr_text:
             return "Отказано в доступе (Permission denied)."
+        if "Unrecognized option" in stderr_text or "Option not found" in stderr_text:
+             return "Неизвестная опция FFmpeg (возможно, опечатка в коде команды)."
+        if "Invalid argument" in stderr_text:
+            return "Неверный аргумент команды FFmpeg (Invalid argument)."
+        if "At least one output file must be specified" in stderr_text:
+            return "Не указан выходной файл (внутренняя ошибка сборки команды)."
+        if "Error initializing filters" in stderr_text:
+            return "Ошибка инициализации фильтров (возможно, неверные параметры кропа или разрешения)."
+        if "moov atom not found" in stderr_text:
+            return "Поврежденный входной файл (moov atom not found)."
+        if "Conversion failed" in stderr_text:
+            return "Конвертация не удалась (Conversion failed)."
 
         lines = [
             line.strip() for line in stderr_text.strip().split('\n')
