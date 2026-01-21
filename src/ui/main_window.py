@@ -750,7 +750,8 @@ class MainWindow(FluentWindow):
         layout.addWidget(group_meta)
         layout.addStretch()
 
-    def toggle_audio_settings_availability(self, codec_text):
+    @pyqtSlot(str)
+    def toggle_audio_settings_availability(self, codec_text: str):
         """
         Блокирует/разблокирует настройки аудио в зависимости от кодека.
         """
@@ -759,8 +760,9 @@ class MainWindow(FluentWindow):
 
         # Битрейт не нужен для copy (без перекодирования) и flac (lossless)
         self.combo_audio_bitrate.setEnabled(not (is_copy or is_flac))
-        
+
         # Каналы не меняем при copy
+        # copy -> disable channels too
         self.combo_audio_channels.setEnabled(not is_copy)
 
     def _create_subtitles_tab(self, parent_widget):
@@ -1245,6 +1247,11 @@ class MainWindow(FluentWindow):
                 self.radio_cpu_bitrate.setEnabled(False)
                 self.spin_cpu_crf.setEnabled(False)
                 self.spin_cpu_bitrate.setEnabled(False)
+
+            # Sync Audio to Lossless (Copy)
+            self.combo_audio_codec.setCurrentText('copy')
+            self.combo_audio_codec.setEnabled(False)
+            self.toggle_audio_settings_availability('copy')
         else:
             # Restore enabled state
             if is_gpu:
@@ -1257,6 +1264,10 @@ class MainWindow(FluentWindow):
                 self.radio_cpu_bitrate.setEnabled(True)
                 self.spin_cpu_crf.setEnabled(True)
                 self.spin_cpu_bitrate.setEnabled(True)
+
+            # Restore Audio controls
+            self.combo_audio_codec.setEnabled(True)
+            self.toggle_audio_settings_availability(self.combo_audio_codec.currentText())
 
     def validate_start_capability(self):
         """Проверяет, можно ли начать кодирование (зависит от энкодера и файлов)."""
@@ -1272,16 +1283,6 @@ class MainWindow(FluentWindow):
         
         self.btn_start_stop.setEnabled(has_files and has_hardware)
 
-    @pyqtSlot(str)
-    def toggle_audio_settings_availability(self, text):
-        """Включает/отключает настройки аудио в зависимости от кодека."""
-        if text in ['copy', 'flac']:
-             self.combo_audio_bitrate.setEnabled(False)
-             # copy -> disable channels too
-             self.combo_audio_channels.setEnabled(False if text == 'copy' else True)
-        else:
-             self.combo_audio_bitrate.setEnabled(True)
-             self.combo_audio_channels.setEnabled(True)
 
     @pyqtSlot(list, str, result='QVariant')
     def prompt_for_subtitle_selection(self, available_tracks, filename):
