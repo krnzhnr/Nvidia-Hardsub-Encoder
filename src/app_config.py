@@ -25,7 +25,7 @@ VIDEO_EXTENSIONS = (
 OUTPUT_SUBDIR = "ENCODED"
 
 # Настройки по умолчанию, которые могут быть изменены через GUI или сохранены
-DEFAULT_TARGET_V_BITRATE_MBPS = 4  # в Мбит/с
+DEFAULT_TARGET_V_BITRATE_KBPS = 4000  # в кбит/с
 
 # Параметры для режима постоянного качества (CQP)
 LOSSLESS_QP_VALUE = 0  # Значение QP для "почти без потерь"

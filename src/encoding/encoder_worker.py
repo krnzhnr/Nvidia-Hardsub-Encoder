@@ -48,6 +48,7 @@ class EncoderWorker(QObject):
         disable_subtitles: bool,
         use_source_path: bool,
         remove_credit_lines: bool,
+        overwrite_existing: bool,
         audio_settings: dict,
         video_settings: dict,
         parent_gui: QObject
@@ -65,6 +66,7 @@ class EncoderWorker(QObject):
         self.disable_subtitles = disable_subtitles
         self.use_source_path = use_source_path
         self.remove_credit_lines = remove_credit_lines
+        self.overwrite_existing = overwrite_existing
         self.audio_settings = audio_settings
         self.video_settings = video_settings
         self.parent_gui = parent_gui
@@ -358,7 +360,7 @@ class EncoderWorker(QObject):
             output_dir.mkdir(parents=True, exist_ok=True)
             self.current_output_file = output_dir / f"{input_file_path.stem}.mp4"
 
-            if self.current_output_file.exists():
+            if self.current_output_file.exists() and not self.overwrite_existing:
                 self._log(
                     f"  [ПРОПУСК] Файл '{self.current_output_file.name}' "
                     "уже существует.",
@@ -371,6 +373,12 @@ class EncoderWorker(QObject):
                 self.cleanup_after_file()
                 self.process_next_file()
                 return
+            elif self.current_output_file.exists() and self.overwrite_existing:
+                self._log(
+                    f"  [ПЕРЕЗАПИСЬ] Файл '{self.current_output_file.name}' "
+                    "будет перезаписан.",
+                    "warning"
+                )
 
             # <<< ИЗМЕНЕНИЕ: Возвращена подробная логика выбора 10-бит
             is_10bit = False
@@ -424,8 +432,8 @@ class EncoderWorker(QObject):
                     # libx265 не использует флаги bitrates для crf
                     log_parts.append(f"CPU x265 (Preset: {enc_settings['preset']}, CRF: {crf})")
                 else:
-                    bitrate_mbps = self.video_settings.get('bitrate', 4)
-                    enc_settings['bitrate'] = f"{bitrate_mbps}M"
+                    bitrate_kbps = self.video_settings.get('bitrate', 4000)
+                    enc_settings['bitrate'] = f"{bitrate_kbps}k"
                     log_parts.append(f"CPU x265 (Preset: {enc_settings['preset']}, Bitrate: {enc_settings['bitrate']})")
                     
             else:
@@ -451,10 +459,10 @@ class EncoderWorker(QObject):
                      enc_settings['qp_value'] = qp
                      log_parts.append(f"NVENC (Preset: {enc_settings['preset']}, QP: {qp})")
                 else:
-                    bitrate_mbps = self.video_settings.get('bitrate', 4)
-                    target_br_str = f"{bitrate_mbps}M"
-                    max_br_str = f"{bitrate_mbps * 2}M"
-                    buf_size_str = f"{bitrate_mbps * 4}M"
+                    bitrate_kbps = self.video_settings.get('bitrate', 4000)
+                    target_br_str = f"{bitrate_kbps}k"
+                    max_br_str = f"{bitrate_kbps * 2}k"
+                    buf_size_str = f"{bitrate_kbps * 4}k"
                     
                     enc_settings['target_bitrate'] = target_br_str
                     enc_settings['min_bitrate'] = target_br_str

@@ -29,7 +29,7 @@ from qfluentwidgets import (
 )
 
 from src.app_config import (
-    APP_DIR, VIDEO_EXTENSIONS, DEFAULT_TARGET_V_BITRATE_MBPS,
+    APP_DIR, VIDEO_EXTENSIONS, DEFAULT_TARGET_V_BITRATE_KBPS,
     FFMPEG_PATH, FFPROBE_PATH, FONTS_SUBDIR, OUTPUT_SUBDIR,
     LOSSLESS_QP_VALUE, SUBTITLE_TRACK_TITLE_KEYWORD,
     NVENC_PRESET, NVENC_RC, NVENC_TUNING, NVENC_AQ, NVENC_AQ_STRENGTH, NVENC_LOOKAHEAD,
@@ -346,6 +346,13 @@ class MainWindow(FluentWindow):
         )
         layout_output.addWidget(self.chk_use_source_path)
 
+        self.chk_overwrite_existing = CheckBox("Перезаписывать существующие файлы")
+        self.chk_overwrite_existing.setToolTip(
+            "Если включено, файлы в папке назначения будут перезаписаны.\n"
+            "Если выключено, существующие файлы будут пропущены."
+        )
+        layout_output.addWidget(self.chk_overwrite_existing)
+
         settings_layout.addWidget(group_box_output)
         settings_layout.addStretch()  # Прижимает группу к верху
 
@@ -462,11 +469,11 @@ class MainWindow(FluentWindow):
         self.widget_nv_bitrate = QWidget()
         l_nv_br = QHBoxLayout(self.widget_nv_bitrate)
         l_nv_br.setContentsMargins(0, 0, 0, 0)
-        l_nv_br.addWidget(BodyLabel("Битрейт (Мбит/с):"))
+        l_nv_br.addWidget(BodyLabel("Битрейт (кбит/с):"))
         self.spin_nv_bitrate = SpinBox()
-        self.spin_nv_bitrate.setRange(1, 100)
-        self.spin_nv_bitrate.setValue(DEFAULT_TARGET_V_BITRATE_MBPS)
-        self.spin_nv_bitrate.setToolTip("Целевой видео битрейт в Мбит/с.")
+        self.spin_nv_bitrate.setRange(100, 100000)
+        self.spin_nv_bitrate.setValue(DEFAULT_TARGET_V_BITRATE_KBPS)
+        self.spin_nv_bitrate.setToolTip("Целевой видео битрейт в кбит/с.")
         l_nv_br.addWidget(self.spin_nv_bitrate)
         l_nv_br.addStretch()
         layout_nv_rc.addWidget(self.widget_nv_bitrate)
@@ -593,11 +600,11 @@ class MainWindow(FluentWindow):
         self.widget_cpu_bitrate = QWidget()
         l_cpu_br = QHBoxLayout(self.widget_cpu_bitrate)
         l_cpu_br.setContentsMargins(0, 0, 0, 0)
-        l_cpu_br.addWidget(BodyLabel("Битрейт (Мбит/с):"))
+        l_cpu_br.addWidget(BodyLabel("Битрейт (кбит/с):"))
         self.spin_cpu_bitrate = SpinBox()
-        self.spin_cpu_bitrate.setRange(1, 100)
-        self.spin_cpu_bitrate.setValue(DEFAULT_TARGET_V_BITRATE_MBPS)
-        self.spin_cpu_bitrate.setToolTip("Целевой битрейт для CPU кодирования в Мбит/с.")
+        self.spin_cpu_bitrate.setRange(100, 100000)
+        self.spin_cpu_bitrate.setValue(DEFAULT_TARGET_V_BITRATE_KBPS)
+        self.spin_cpu_bitrate.setToolTip("Целевой битрейт для CPU кодирования в кбит/с.")
         l_cpu_br.addWidget(self.spin_cpu_bitrate)
         l_cpu_br.addStretch()
         layout_cpu_rc.addWidget(self.widget_cpu_bitrate)
@@ -1410,14 +1417,14 @@ class MainWindow(FluentWindow):
                 if video_settings['rc'] == 'constqp':
                      encoding_mode_str.append(f"QP: {video_settings['qp']}")
                 else:
-                     encoding_mode_str.append(f"Bitrate: {video_settings['bitrate']}M")
+                     encoding_mode_str.append(f"Bitrate: {video_settings['bitrate']}k")
                      encoding_mode_str.append(f"RC: {video_settings['rc']}")
             else:
                 encoding_mode_str.append(f"Preset: {video_settings['preset']}")
                 if video_settings['rc_mode'] == 'crf':
                     encoding_mode_str.append(f"CRF: {video_settings['crf']}")
                 else:
-                     encoding_mode_str.append(f"Bitrate: {video_settings['bitrate']}M")
+                     encoding_mode_str.append(f"Bitrate: {video_settings['bitrate']}k")
 
             if force_10bit_output:
                 encoding_mode_str.append("10-bit (forced)")
@@ -1469,6 +1476,7 @@ class MainWindow(FluentWindow):
                 disable_subtitles=disable_subtitles,
                 use_source_path=use_source_path,
                 remove_credit_lines=remove_credit_lines,
+                overwrite_existing=self.chk_overwrite_existing.isChecked(),
                 audio_settings=audio_settings,
                 video_settings=video_settings, 
                 parent_gui=self
